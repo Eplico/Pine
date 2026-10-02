@@ -29,23 +29,33 @@ def mirror_url(up: Upstream, ref: str, path: str) -> str:
 
 
 def fetch_mirror_file(up: Upstream, ref: str, path: str, attempts: int = 5) -> str | None:
-    headers = {"User-Agent": "evergreen-eg"}
-    token = os.environ.get("GITHUB_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"  # higher rate limits in CI
-    req = urllib.request.Request(mirror_url(up, ref, path), headers=headers)
+    """Fetch one file from Mozilla's GitHub mirror (None if it does not exist).
+
+    Requests are anonymous unless EG_MIRROR_TOKEN is set (CI sets it to raise
+    GitHub's rate limit). A generic GITHUB_TOKEN is deliberately not used: it
+    may belong to something else, and a token without access makes GitHub
+    answer 404 even for public files.
+    """
+    url = mirror_url(up, ref, path)
+    token = os.environ.get("EG_MIRROR_TOKEN")
     for attempt in range(attempts):
+        headers = {"User-Agent": "evergreen-eg"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as resp:
                 return resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
+            if token and e.code in (401, 403, 404):
+                token = None  # retry anonymously
+                continue
             if e.code == 404:
                 return None
             if e.code in (429, 500, 502, 503) and attempt < attempts - 1:
                 time.sleep(2 ** (attempt + 1))  # 2, 4, 8, 16 s
                 continue
             raise EgError(f"Mirror request failed for {path}: {e}") from e
-    return None
+    raise EgError(f"Mirror request failed for {path}: too many retries")
 
 
 def check_patches_against_mirror(up: Upstream, ref: str | None = None) -> None:

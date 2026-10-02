@@ -97,6 +97,14 @@ pref("extensions.ml.enabled", false);
 
 // --- Firefox onboarding (Evergreen will ship its own) ---------------------------
 pref("browser.aboutwelcome.enabled", false);
+// Mozilla's first-run notices are about Mozilla's Firefox: its Terms of Use
+// modal and the data-collection privacy notice (which opens a tab). Evergreen
+// is a different product that collects no data. Non-official builds such as
+// Evergreen's already skip the Terms of Use modal; these make the dev harness
+// on official Firefox behave the same.
+pref("termsofuse.bypassNotification", true);
+pref("browser.preonboarding.enabled", false); // eg:dynamic Nimbus fallbackPref of the preonboarding feature
+pref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);
 
 // --- Evergreen -------------------------------------------------------------------
 // Unpinned tabs not used for this many hours move to the Archive (0 = never).

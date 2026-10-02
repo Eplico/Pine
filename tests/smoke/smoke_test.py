@@ -57,6 +57,9 @@ const tabByTitle = t => gB.tabs.find(x => x.label == t);
 const nextTabOpen = () => new Promise(r =>
   gB.tabContainer.addEventListener("TabOpen", e => r(e.target), { once: true }));
 const space = name => SpacesStore.state.spaces.find(s => (s.name || c.defaultName) == name);
+// For failure messages: every tab with its Space, URL and state.
+const tabList = () => gB.tabs.map(t => [t.label, t.linkedBrowser.currentURI.spec,
+  t.getAttribute("evergreen-space"), t.selected ? "selected" : "", t.hidden ? "hidden" : ""].join(" | "));
 // Errors from Evergreen code: script errors and console.error() calls.
 const evergreenConsoleErrors = () => {
   let scriptErrors = Services.console.getMessageArray()
@@ -340,7 +343,7 @@ class Run:
                 c.switchToIndex(0);
                 let s3 = { active: c.activeSpaceId };
                 return { personal, s1, s2, s3,
-                  keys: !!w.document.getElementById("evergreen-key-space-9") };
+                  keys: !!w.document.getElementById("evergreen-key-space-9"), tabs: tabList() };
                 """
             )
             assert r["s1"]["active"] == r["personal"] and r["s1"]["aVisible"] and r["s1"]["cHidden"], r
@@ -423,10 +426,10 @@ class Run:
                 c.reopenArchived(entry);
                 w.document.getElementById("evergreen-archive-panel").hidePopup();
                 await until(() => tabByTitle("Page D"));
-                return { left: ArchiveStore.entries.length, selected: gB.selectedTab.label };
+                return { left: ArchiveStore.entries.length, selected: gB.selectedTab.label, tabs: tabList() };
                 """
             )
-            assert r == {"left": 1, "selected": "Page D"}, r
+            assert r["left"] == 1 and r["selected"] == "Page D", r
 
         def purge():
             r = self.js(

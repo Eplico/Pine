@@ -40,11 +40,11 @@ jobs:
       - name: Patches apply to the pinned Firefox release
         run: python eg.py check-patches
         env:
-          GITHUB_TOKEN: ${{ github.token }}  # authenticated rate limits for Mozilla's mirror
+          EG_MIRROR_TOKEN: ${{ github.token }}  # authenticated rate limits for Mozilla's mirror
       - name: Every Evergreen pref exists in the pinned Firefox release
         run: python eg.py check-prefs
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          EG_MIRROR_TOKEN: ${{ github.token }}
 
   windows-tooling:
     name: Tooling on Windows
