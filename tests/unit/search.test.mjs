@@ -9,29 +9,47 @@ import {
   ECOSIA,
   applyDefaultSearch,
   ensureEngine,
+  reconcileDefaultSearch,
 } from "../../src/browser/components/evergreen/SearchDefaults.sys.mjs";
 
 /** A fake of the bits of Services.search that SearchDefaults uses. */
-function fakeSearch({ engines = [], legacy = false } = {}) {
+function fakeSearch({ engines = [], legacy = false, defaultName = null } = {}) {
   let calls = [];
-  let list = engines.map(name => ({ name }));
+  let nextId = 1;
+  let engine = name => ({ name, id: `${name.toLowerCase()}-${nextId++}`, hidden: false });
+  let list = engines.map(engine);
   let svc = {
     calls,
+    list,
+    defaultEngine: list.find(e => e.name == defaultName) ?? null,
     getEngineByName: name => list.find(e => e.name == name) ?? null,
-    async setDefault(engine, reason) {
-      calls.push(["setDefault", engine.name, reason]);
+    getEngineById: id => list.find(e => e.id == id) ?? null,
+    async setDefault(e, reason) {
+      calls.push(["setDefault", e.name, reason]);
+      svc.defaultEngine = e;
+    },
+    /** What Firefox does when its own copy of an engine replaces a user's. */
+    replaceWithAppEngine(name, fallbackName) {
+      let i = list.findIndex(e => e.name == name);
+      list.splice(i, 1, engine(name));
+      svc.defaultEngine = list.find(e => e.name == fallbackName);
     },
   };
   svc.addUserEngine = legacy
     ? async function (name, url, alias) {
         calls.push(["addUserEngine", { name, url, alias }]);
-        list.push({ name });
+        list.push(engine(name));
       }
     : async function (formInfo) {
         calls.push(["addUserEngine", formInfo]);
-        list.push({ name: formInfo.name });
+        list.push(engine(formInfo.name));
       };
   return svc;
+}
+
+/** The pref that remembers which engine Evergreen made the default. */
+function fakeManaged(value = "") {
+  return { value, get: () => value, set: v => (value = v), clear: () => (value = "") };
 }
 
 test("uses Firefox's own Ecosia engine when it exists", async () => {
@@ -71,4 +89,58 @@ test("Evergreen's Ecosia entry carries no partner code", () => {
     assert.equal(u.searchParams.has("tt"), false);
     assert.equal(u.searchParams.get("q"), "x");
   }
+});
+
+test("remembers the engine it made the default", async () => {
+  let svc = fakeSearch({ engines: ["Google"], defaultName: "Google" });
+  let managed = fakeManaged();
+  let { engine } = await applyDefaultSearch(svc, 0, managed);
+  assert.equal(managed.get(), engine.id);
+  assert.equal(svc.defaultEngine.name, "Ecosia");
+});
+
+test("keeps Ecosia the default when Firefox swaps in its own Ecosia", async () => {
+  let svc = fakeSearch({ engines: ["Google"], defaultName: "Google" });
+  let managed = fakeManaged();
+  await applyDefaultSearch(svc, 0, managed);
+  // Firefox learns the region, adds its own Ecosia, drops Evergreen's
+  // duplicate and falls back to Google.
+  svc.replaceWithAppEngine("Ecosia", "Google");
+  assert.equal(await reconcileDefaultSearch(svc, 0, managed), true);
+  assert.equal(svc.defaultEngine.name, "Ecosia");
+  assert.equal(managed.get(), svc.getEngineByName("Ecosia").id);
+  assert.equal(svc.calls.filter(c => c[0] == "addUserEngine").length, 1, "no second copy added");
+});
+
+test("stops managing the default once the user picks another engine", async () => {
+  let svc = fakeSearch({ engines: ["Google", "DuckDuckGo"], defaultName: "Google" });
+  let managed = fakeManaged();
+  await applyDefaultSearch(svc, 0, managed);
+  await svc.setDefault(svc.getEngineByName("DuckDuckGo"), 1);
+  assert.equal(await reconcileDefaultSearch(svc, 0, managed), false);
+  assert.equal(managed.get(), "");
+  // Later engine changes leave the user's choice alone.
+  svc.replaceWithAppEngine("Ecosia", "DuckDuckGo");
+  assert.equal(await reconcileDefaultSearch(svc, 0, managed), false);
+  assert.equal(svc.defaultEngine.name, "DuckDuckGo");
+});
+
+test("does nothing while its engine is still the default", async () => {
+  let svc = fakeSearch({ engines: ["Google"], defaultName: "Google" });
+  let managed = fakeManaged();
+  await applyDefaultSearch(svc, 0, managed);
+  let before = svc.calls.length;
+  assert.equal(await reconcileDefaultSearch(svc, 0, managed), false);
+  assert.equal(svc.calls.length, before);
+});
+
+test("leaves the default alone when the user removed Ecosia", async () => {
+  let svc = fakeSearch({ engines: ["Google"], defaultName: "Google" });
+  let managed = fakeManaged();
+  await applyDefaultSearch(svc, 0, managed);
+  svc.list.splice(svc.list.findIndex(e => e.name == "Ecosia"), 1);
+  svc.defaultEngine = svc.getEngineByName("Google");
+  assert.equal(await reconcileDefaultSearch(svc, 0, managed), false);
+  assert.equal(svc.defaultEngine.name, "Google");
+  assert.equal(managed.get(), "");
 });

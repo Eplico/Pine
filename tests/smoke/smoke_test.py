@@ -160,6 +160,9 @@ class Run:
                     'user_pref("network.trr.mode", 5);',
                     'user_pref("network.proxy.type", 0);',
                     'user_pref("browser.shell.checkDefaultBrowser", false);',
+                    # The first-run import window would cover the browser;
+                    # the "import offer" check opens it on purpose.
+                    'user_pref("evergreen.firstrun.importPrompt", false);',
                 ]
             )
             + "\n",
@@ -223,6 +226,21 @@ class Run:
     def shot(self, name: str):
         if self.shots:
             self.m.screenshot(str(self.shots / f"{name}.png"))
+        if self.args.log_screenshots:
+            # A small JPEG of the whole window (page content included), as one
+            # log line: "EVERGREEN-SHOT <name> data:image/jpeg;base64,...".
+            data = self.js(
+                """
+                let r = new w.DOMRect(0, 0, w.innerWidth, w.innerHeight);
+                let bmp = await w.browsingContext.currentWindowGlobal.drawSnapshot(r, 0.75, "white");
+                let canvas = w.document.createElementNS("http://www.w3.org/1999/xhtml", "canvas");
+                canvas.width = bmp.width;
+                canvas.height = bmp.height;
+                canvas.getContext("2d").drawImage(bmp, 0, 0);
+                return canvas.toDataURL("image/jpeg", 0.8);
+                """
+            )
+            print(f"EVERGREEN-SHOT {name} {data}", flush=True)
 
     # --- checks ------------------------------------------------------------------
 
@@ -257,6 +275,37 @@ class Run:
             assert r["expanded"], "sidebar should start expanded on first run"
             return r
 
+        def layout():
+            r = self.js(
+                """
+                let d = w.document;
+                let box = id => {
+                  let e = d.getElementById(id);
+                  if (!e || !e.isConnected) return null;
+                  let b = e.getBoundingClientRect();
+                  return b.width || b.height ? [Math.round(b.left), Math.round(b.top), Math.round(b.width), Math.round(b.height)] : "hidden";
+                };
+                let ids = ["navigator-toolbox", "nav-bar", "PanelUI-button", "sidebar-button", "downloads-button",
+                  "back-button", "forward-button", "stop-reload-button", "urlbar-container", "urlbar",
+                  "unified-extensions-button", "sidebar-container", "sidebar-main", "sidebar-launcher-splitter",
+                  "tabbrowser-tabbox", "TabsToolbar", "titlebar"];
+                let out = { window: [w.innerWidth, w.innerHeight],
+                  navOrder: [...d.getElementById("nav-bar").querySelectorAll(":scope > *, #nav-bar-customization-target > *")]
+                    .filter(e => e.id && e.getBoundingClientRect().width).map(e => e.id),
+                  sidebar: { visibility: Services.prefs.getStringPref("sidebar.visibility", ""),
+                    expanded: w.SidebarController?._state?.launcherExpanded,
+                    width: w.SidebarController?._state?.launcherWidth,
+                    expandedWidth: w.SidebarController?._state?.expandedLauncherWidth,
+                    nova: Services.prefs.getBoolPref("browser.nova.enabled", false),
+                    density: Services.prefs.getIntPref("browser.uidensity", -1) } };
+                for (let id of ids) out[id] = box(id);
+                return out;
+                """
+            )
+            for k, v in r.items():
+                print(f"      {k}: {v}")
+            self.shot("layout-first-run")
+
         def prefs():
             expected = {p.name: p.value for p in load_prefs(PREFS_FILE)}
             actual = self.js(
@@ -280,7 +329,7 @@ class Run:
         def first_run():
             r = self.js(
                 """
-                await until(() => Services.prefs.getBoolPref("evergreen.defaults.searchEngineApplied", false), 20000)
+                await until(() => Services.prefs.getBoolPref("evergreen.defaults.searchEngineApplied2", false), 20000)
                   .catch(e => { throw new Error(e.message + " / " + evergreenConsoleErrors().join(" / ")); });
                 await until(() => Services.prefs.getBoolPref("evergreen.defaults.strictTrackingProtectionApplied", false), 20000);
                 await sleep(500);
@@ -291,15 +340,37 @@ class Run:
                   etp: Services.prefs.getStringPref("browser.contentblocking.category", ""),
                   trackingProtection: Services.prefs.getBoolPref("privacy.trackingprotection.enabled"),
                   engine: engine.name,
+                  managed: Services.prefs.getStringPref("evergreen.search.managedDefaultEngineId", "") == engine.id,
                   google: !!search.getEngineByName("Google"),
                   ddg: !!search.getEngineByName("DuckDuckGo"),
                 };
                 """
             )
             assert r["etp"] == "strict" and r["trackingProtection"], r
-            assert r["engine"] == "Ecosia", r
+            assert r["engine"] == "Ecosia" and r["managed"], r
             assert r["google"] and r["ddg"], f"Google and DuckDuckGo should stay available: {r}"
             return r
+
+        def import_offer():
+            r = self.js(
+                """
+                let { EvergreenStartup } = ChromeUtils.importESModule("@BASE@EvergreenStartup.sys.mjs");
+                let isImport = win => win.document.documentURI.includes("migration-dialog-window");
+                let result = await EvergreenStartup.offerImport();
+                let opened = false;
+                if (result == "opened") {
+                  let win = await until(() => [...Services.wm.getEnumerator(null)].find(isImport));
+                  await until(() => win.document.readyState == "complete");
+                  opened = true;
+                  win.close();
+                }
+                return { result, opened };
+                """
+            )
+            assert r["result"] in ("opened", "nothing-found"), r
+            assert r["result"] != "opened" or r["opened"], r
+            return ("import window opened" if r["opened"]
+                    else "no other browser's data on this machine, so no prompt")
 
         def spaces_and_containers():
             r = self.js(
@@ -519,7 +590,9 @@ class Run:
                   active: c.activeSpaceId,
                   tabs: gB.tabs.filter(t => !t.pinned).map(t => [t.label, t.getAttribute("evergreen-space")]).sort(),
                   workHidden: gB.tabs.filter(t => t.getAttribute("evergreen-space") == space("Work").id).every(t => t.hidden),
-                  kept: tabByTitle("Page A").hasAttribute("evergreen-keep") };
+                  kept: tabByTitle("Page A").hasAttribute("evergreen-keep"),
+                  engine: (await ChromeUtils.importESModule("@BASE@EvergreenStartup.sys.mjs")
+                    .getSearchService().service.getDefault()).name };
                 """
             )
             assert after["spaces"] == before["spaces"], (before, after)
@@ -529,6 +602,7 @@ class Run:
             got = [t for t in after["tabs"] if t[0].startswith("Page")]
             assert got == want, (want, got)
             assert after["workHidden"] and after["kept"], after
+            assert after["engine"] == "Ecosia", f"Ecosia should still be the default: {after}"
             return f"{len(after['spaces'])} Spaces and {len(got)} pages restored"
 
         def delete_space():
@@ -572,8 +646,10 @@ class Run:
             assert not r, "\n  " + "\n  ".join(r)
 
         self.check("Evergreen loads into the window", loads)
+        self.check("window layout", layout)
         self.check("default prefs from prefs/evergreen.js", prefs)
         self.check("first run: ETP Strict and Ecosia", first_run)
+        self.check("first run: offer to import from another browser", import_offer)
         self.check("Spaces with separate sign-ins (containers)", spaces_and_containers)
         self.check("new-tab command uses the Space's container", new_tab_command)
         self.check("switching Spaces hides/shows tabs", switching)
@@ -598,6 +674,8 @@ def main():
     p.add_argument("--binary", help="test a built Evergreen instead (path to evergreen.exe / evergreen)")
     p.add_argument("--headless", action="store_true", help="run Firefox with -headless")
     p.add_argument("--screenshots", help="directory to save screenshots in")
+    p.add_argument("--log-screenshots", action="store_true",
+                   help="also print each screenshot to the log as a small JPEG data URL")
     args = p.parse_args()
     run = Run(args)
     try:

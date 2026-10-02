@@ -11,7 +11,7 @@
  */
 
 import { ArchiveStore } from "./ArchiveStore.sys.mjs";
-import { applyDefaultSearch } from "./SearchDefaults.sys.mjs";
+import { applyDefaultSearch, reconcileDefaultSearch } from "./SearchDefaults.sys.mjs";
 import { SpacesStore } from "./SpacesStore.sys.mjs";
 import { EvergreenWindow } from "./EvergreenWindow.sys.mjs";
 
@@ -20,8 +20,23 @@ import { EvergreenWindow } from "./EvergreenWindow.sys.mjs";
 // afterwards is never overridden.
 const STEP_PREFS = {
   etp: "evergreen.defaults.strictTrackingProtectionApplied",
-  search: "evergreen.defaults.searchEngineApplied",
+  // "2": profiles from the first preview could lose the Ecosia default when
+  // Firefox learned the region (see reconcileDefaultSearch); apply it again.
+  search: "evergreen.defaults.searchEngineApplied2",
+  importOffer: "evergreen.defaults.importOffered",
 };
+// Off in automated tests, where an import window would get in the way.
+const IMPORT_PROMPT_PREF = "evergreen.firstrun.importPrompt";
+
+// The id of the engine Evergreen made the default, while it manages it.
+const MANAGED_SEARCH_PREF = "evergreen.search.managedDefaultEngineId";
+const managedSearch = {
+  get: () => Services.prefs.getStringPref(MANAGED_SEARCH_PREF, ""),
+  set: id => Services.prefs.setStringPref(MANAGED_SEARCH_PREF, id),
+  clear: () => Services.prefs.clearUserPref(MANAGED_SEARCH_PREF),
+};
+const SEARCH_TOPIC = "browser-search-engine-modified";
+const SEARCH_SETTLE_MS = 1000;
 
 const ARCHIVE_CHECK_INTERVAL_MS = 10 * 60 * 1000;
 
@@ -72,6 +87,10 @@ export const EvergreenStartup = {
   quit() {
     this._timer?.cancel();
     this._timer = null;
+    if (this._searchObserver) {
+      Services.obs.removeObserver(this._searchObserver, SEARCH_TOPIC);
+      this._searchObserver = null;
+    }
   },
 
   async _applyFirstRunDefaults() {
@@ -89,12 +108,70 @@ export const EvergreenStartup = {
       }
       Services.prefs.setBoolPref(STEP_PREFS.etp, true);
     }
+    let { service, changeReason } = getSearchService();
+    await service.init();
     if (!Services.prefs.getBoolPref(STEP_PREFS.search, false)) {
-      let { service, changeReason } = getSearchService();
-      await service.init();
-      await applyDefaultSearch(service, changeReason);
+      await applyDefaultSearch(service, changeReason, managedSearch);
       Services.prefs.setBoolPref(STEP_PREFS.search, true);
+    } else {
+      await reconcileDefaultSearch(service, changeReason, managedSearch);
     }
+    this._watchSearchEngines(service, changeReason);
+
+    if (
+      !Services.prefs.getBoolPref(STEP_PREFS.importOffer, false) &&
+      Services.prefs.getBoolPref(IMPORT_PROMPT_PREF, true)
+    ) {
+      Services.prefs.setBoolPref(STEP_PREFS.importOffer, true);
+      await this.offerImport();
+    }
+  },
+
+  /**
+   * Offer to bring bookmarks, passwords and history over from another
+   * browser: Firefox's import window, shown once, and only when another
+   * browser's data is found on this computer. Everything is read locally.
+   *
+   * @returns {Promise<"opened" | "nothing-found">}
+   */
+  async offerImport() {
+    let { MigrationUtils } = ChromeUtils.importESModule(
+      "resource:///modules/MigrationUtils.sys.mjs"
+    );
+    let found = false;
+    for (let key of MigrationUtils.availableMigratorKeys) {
+      if (await MigrationUtils.getMigrator(key)) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      return "nothing-found";
+    }
+    // Without an opener this is a small standalone window, rather than a
+    // Settings tab.
+    MigrationUtils.showMigrationWizard(null, {
+      entrypoint: MigrationUtils.MIGRATION_ENTRYPOINTS.FIRSTRUN,
+    });
+    return "opened";
+  },
+
+  /** Re-check the default whenever Firefox changes its engines (see reconcileDefaultSearch). */
+  _watchSearchEngines(service, changeReason) {
+    let timer = null;
+    this._searchObserver = () => {
+      timer?.cancel();
+      timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+      timer.initWithCallback(
+        () =>
+          reconcileDefaultSearch(service, changeReason, managedSearch).catch(e =>
+            console.error("Evergreen search default", e)
+          ),
+        SEARCH_SETTLE_MS,
+        Ci.nsITimer.TYPE_ONE_SHOT
+      );
+    };
+    Services.obs.addObserver(this._searchObserver, SEARCH_TOPIC);
   },
 
   _startArchiveTimer() {

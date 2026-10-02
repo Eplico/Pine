@@ -71,20 +71,30 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Firefox version on the runner
+      - name: Firefox to test in
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
+            # The runner's Firefox.
             powershell -Command "(Get-Item 'C:\Program Files\Mozilla Firefox\firefox.exe').VersionInfo.ProductVersion"
           else
-            firefox --version
-            echo "FIREFOX_DIR=$(dirname "$(readlink -f "$(command -v firefox)")")" >> "$GITHUB_ENV"
+            # The Firefox release Evergreen builds on (upstream.json), so the
+            # UI is checked against the same front end as the real build.
+            version=$(python -c "import json; print(json.load(open('upstream.json'))['firefox']['version'])")
+            curl -sSfL --retry 3 -o "$RUNNER_TEMP/firefox.tar.xz" \
+              "https://archive.mozilla.org/pub/firefox/releases/$version/linux-x86_64/en-US/firefox-$version.tar.xz"
+            mkdir -p "$RUNNER_TEMP/ff" && tar -xJf "$RUNNER_TEMP/firefox.tar.xz" -C "$RUNNER_TEMP/ff"
+            "$RUNNER_TEMP/ff/firefox/firefox" --version
+            echo "FIREFOX_DIR=$RUNNER_TEMP/ff/firefox" >> "$GITHUB_ENV"
           fi
       - name: Run Evergreen in Firefox and check it
         shell: bash
         run: |
           args=(--headless --screenshots smoke-screenshots)
-          if [ -n "${FIREFOX_DIR:-}" ]; then args+=(--firefox "$FIREFOX_DIR"); fi
+          if [ -n "${FIREFOX_DIR:-}" ]; then
+            # Small JPEG screenshots in the log too, readable without the artifact.
+            args+=(--firefox "$FIREFOX_DIR" --log-screenshots)
+          fi
           python tests/smoke/smoke_test.py "${args[@]}"
       - name: Upload screenshots and Firefox log
         if: always()

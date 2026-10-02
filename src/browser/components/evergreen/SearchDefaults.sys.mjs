@@ -51,9 +51,57 @@ export async function ensureEngine(search, def) {
   return { engine, added: true };
 }
 
-/** Make Ecosia the default engine. Returns { engine, added }. */
-export async function applyDefaultSearch(search, changeReason) {
+/**
+ * Make Ecosia the default engine and remember which engine that is, so
+ * reconcileDefaultSearch can keep it the default. Returns { engine, added }.
+ *
+ * `managed` stores the id of the engine Evergreen made the default:
+ * { get(): string, set(id), clear() }.
+ */
+export async function applyDefaultSearch(search, changeReason, managed = null) {
   let result = await ensureEngine(search, ECOSIA);
   await search.setDefault(result.engine, changeReason);
+  managed?.set(result.engine.id);
   return result;
+}
+
+/**
+ * Keep Ecosia the default after Firefox reloads its engine list, until the
+ * user picks another engine.
+ *
+ * Firefox ships its own Ecosia in some regions, and it learns the region
+ * after first run. When its Ecosia arrives, Firefox drops Evergreen's
+ * same-named entry as a duplicate and, because that entry was the default,
+ * falls back to its own default engine (Google): Ecosia is listed but no
+ * longer the default. Here, if the engine Evergreen made the default has
+ * disappeared and another Ecosia took its place, that one becomes the
+ * default. If no Ecosia is left, the user removed it: stop managing.
+ *
+ * If that engine still exists but is not the default, the user chose another
+ * engine: stop managing the default. Call this after Firefox has finished
+ * changing engines (not synchronously from its notifications), because
+ * Firefox announces the new default before it removes the duplicate.
+ *
+ * Returns true if it changed the default.
+ */
+export async function reconcileDefaultSearch(search, changeReason, managed) {
+  let managedId = managed.get();
+  if (!managedId) {
+    return false;
+  }
+  if (search.getEngineById(managedId)) {
+    if (search.defaultEngine?.id != managedId) {
+      managed.clear();
+    }
+    return false;
+  }
+  let engine = search.getEngineByName(ECOSIA.name);
+  if (!engine || engine.hidden) {
+    // No Ecosia took its place: the user removed it. Leave the default alone.
+    managed.clear();
+    return false;
+  }
+  await search.setDefault(engine, changeReason);
+  managed.set(engine.id);
+  return true;
 }
