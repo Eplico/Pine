@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import http.server
-import json
 import os
 import shutil
 import socket
@@ -127,6 +126,14 @@ class Run:
                     # classify the profile as "custom" ETP before Evergreen's
                     # first run. Keep the profile like a real user's.
                     'user_pref("remote.prefs.recommended", false);',
+                    # ...so set the automation prefs this test does need.
+                    'user_pref("browser.warnOnQuit", false);',
+                    'user_pref("browser.tabs.warnOnClose", false);',
+                    'user_pref("browser.startup.couldRestoreSession.count", -1);',
+                    'user_pref("browser.startup.homepage_override.mstone", "ignore");',
+                    'user_pref("toolkit.startup.max_resumed_crashes", -1);',
+                    'user_pref("app.update.disabledForTesting", true);',
+                    'user_pref("extensions.update.enabled", false);',
                     # Test-only: the local page server is plain HTTP on localhost.
                     'user_pref("dom.security.https_only_mode", false);',
                     'user_pref("network.trr.mode", 5);',
@@ -173,8 +180,20 @@ class Run:
             try:
                 self.proc.wait(timeout=60)
             except subprocess.TimeoutExpired:
+                print("  Firefox did not quit within 60 s; killing it")
                 self.proc.kill()
+                self.proc.wait(timeout=30)
             self.proc = None
+            if sys.platform.startswith("win"):
+                # Child processes can outlive the parent briefly and keep the
+                # profile locked; parent.lock can be deleted once none is left.
+                lock = self.profile / "parent.lock"
+                deadline = time.time() + 30
+                while lock.exists() and time.time() < deadline:
+                    try:
+                        lock.unlink()
+                    except OSError:
+                        time.sleep(0.5)
 
     def js(self, body: str, *args):
         script = "return (async () => {\n" + PRELUDE + "\n" + body + "\n})();"
