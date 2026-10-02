@@ -1,0 +1,16 @@
+{
+  "name": "evergreen",
+  "private": true,
+  "description": "Evergreen browser: lint and unit tests for the UI layer (src/) and dev harness.",
+  "license": "MPL-2.0",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint .",
+    "test": "node --test \"tests/unit/*.test.mjs\""
+  },
+  "devDependencies": {
+    "eslint": "^9.39.0",
+    "eslint-plugin-no-unsanitized": "^4.1.4",
+    "globals": "^16.5.0"
+  }
+}

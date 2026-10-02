@@ -1,0 +1,31 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+# Evergreen's UI and startup code. Added to the tree by `eg.py prepare` and
+# built because patches/0001-register-evergreen-component.patch lists this
+# directory in browser/components/moz.build.
+
+with Files("**"):
+    BUG_COMPONENT = ("Evergreen", "General")
+
+MOZ_SRC_FILES += [
+    "Archive.sys.mjs",
+    "ArchiveStore.sys.mjs",
+    "evergreen.css",
+    "EvergreenStartup.sys.mjs",
+    "EvergreenWindow.sys.mjs",
+    "SearchDefaults.sys.mjs",
+    "Spaces.sys.mjs",
+    "SpacesStore.sys.mjs",
+]
+
+EXTRA_COMPONENTS += [
+    "Evergreen.manifest",
+]
+
+# prefs/evergreen.js, copied here by `eg.py prepare`. Installed as
+# defaults/preferences/evergreen.js, which Firefox loads after firefox.js.
+JS_PREFERENCE_FILES += [
+    "evergreen.js",
+]

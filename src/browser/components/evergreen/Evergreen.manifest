@@ -1,0 +1,6 @@
+# Evergreen entry points, registered with Firefox's category manager.
+# The dev harness (dev/EvergreenDev.sys.mjs) makes the same calls.
+category browser-first-window-ready moz-src:///browser/components/evergreen/EvergreenStartup.sys.mjs EvergreenStartup.firstWindowReady
+category browser-window-delayed-startup moz-src:///browser/components/evergreen/EvergreenWindow.sys.mjs EvergreenWindow.init
+category browser-window-unload moz-src:///browser/components/evergreen/EvergreenWindow.sys.mjs EvergreenWindow.uninit
+category browser-quit-application-granted moz-src:///browser/components/evergreen/EvergreenStartup.sys.mjs EvergreenStartup.quit

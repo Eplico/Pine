@@ -1,0 +1,93 @@
+# Evergreen CI: fast checks only. Full Firefox builds run on a developer's own
+# machine (`eg.py build`); nothing here needs a server of our own.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, unit tests, patch and pref checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: ESLint (includes no-unsanitized for privileged code)
+        run: npm run lint
+      - name: UI unit tests
+        run: npm test
+      - name: Tooling unit tests
+        run: python -m unittest discover -s tests/python -v
+      - name: Patch series and prefs syntax
+        run: python eg.py lint
+      - name: Patches apply to the pinned Firefox release
+        run: python eg.py check-patches
+      - name: Every Evergreen pref exists in the pinned Firefox release
+        run: python eg.py check-prefs
+
+  windows-tooling:
+    name: Tooling on Windows
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m unittest discover -s tests/python -v
+      - run: python eg.py lint
+
+  smoke:
+    name: Smoke test in Firefox (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Firefox version on the runner
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            powershell -Command "(Get-Item 'C:\Program Files\Mozilla Firefox\firefox.exe').VersionInfo.ProductVersion"
+          else
+            firefox --version
+            echo "FIREFOX_DIR=$(dirname "$(readlink -f "$(command -v firefox)")")" >> "$GITHUB_ENV"
+          fi
+      - name: Run Evergreen in Firefox and check it
+        shell: bash
+        run: |
+          args=(--headless --screenshots smoke-screenshots)
+          if [ -n "${FIREFOX_DIR:-}" ]; then args+=(--firefox "$FIREFOX_DIR"); fi
+          python tests/smoke/smoke_test.py "${args[@]}"
+      - name: Upload screenshots and Firefox log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.os }}
+          path: |
+            smoke-screenshots/
+            .eg/dev/smoke-firefox.log
+          if-no-files-found: ignore
