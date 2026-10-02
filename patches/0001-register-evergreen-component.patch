@@ -1,0 +1,20 @@
+Evergreen-Patch: register-evergreen-component
+Why: Builds browser/components/evergreen (Evergreen's UI and startup code,
+  added by the src/ overlay). Everything else Evergreen registers -- window
+  hooks, startup hooks, default prefs -- comes from that directory's own
+  moz.build and Evergreen.manifest, so this is the only upstream line needed
+  to load Evergreen.
+Upstream: not upstreamable (Evergreen-specific)
+Drop-when: never; this is Evergreen's entry point
+Owner: Evergreen maintainers
+
+--- a/browser/components/moz.build
++++ b/browser/components/moz.build
+@@ -39,6 +39,7 @@
+     "customkeys",
+     "downloads",
+     "enterprisepolicies",
++    "evergreen",
+     "extensions",
+     "firefoxview",
+     "genai",

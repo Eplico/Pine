@@ -1,0 +1,4 @@
+# macOS. Not a target yet (Windows first); kept so the tooling stays portable.
+# Universal builds (arm64 + x86_64), signing and notarization come later.
+
+ac_add_options --target=aarch64-apple-darwin

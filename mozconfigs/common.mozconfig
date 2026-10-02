@@ -1,0 +1,35 @@
+# Evergreen build configuration shared by every platform.
+#
+# Rule (design doc §8.1): Evergreen keeps every protection Mozilla's own
+# builds ship. Never add --disable-sandbox, --without-wasm-sandboxed-libraries,
+# MOZ_REQUIRE_SIGNING=0, or anything else that weakens a release build.
+
+ac_add_options --enable-application=browser
+mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-evergreen
+
+# Identity: our own branding, binary name and profile location, so Evergreen
+# never shares a profile with an installed Firefox.
+ac_add_options --with-branding=browser/branding/evergreen
+ac_add_options --with-app-name=evergreen
+ac_add_options --with-app-basename=Evergreen
+export MOZ_APP_VENDOR=Evergreen
+
+# Release configuration.
+ac_add_options --enable-update-channel=release
+ac_add_options --enable-release
+ac_add_options --enable-optimize
+ac_add_options --disable-debug
+
+# Add-ons must be signed by addons.mozilla.org. This is already the default
+# for release builds; stated so it cannot silently change.
+export MOZ_REQUIRE_SIGNING=1
+
+# No crash reports leave the machine (design doc §8.3). Telemetry reporting is
+# not compiled in because MOZILLA_OFFICIAL is not set: do not set it, it also
+# switches on Mozilla's own reporting endpoints.
+ac_add_options --disable-crashreporter
+
+# Performance (not security): PGO + LTO make release builds faster but take
+# much longer to build. Enable for published releases (milestone M3):
+# export MOZ_PGO=1
+# ac_add_options --enable-lto=cross

@@ -1,0 +1,5 @@
+# eg.py work area: downloads, prepared Firefox tree, dev browser and profiles.
+/.eg/
+__pycache__/
+*.pyc
+/node_modules/

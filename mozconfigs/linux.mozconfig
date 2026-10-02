@@ -1,0 +1,4 @@
+# Linux x86-64. Secondary platform: kept building so the tooling stays
+# portable, and used by CI for fast checks.
+
+ac_add_options --target=x86_64-pc-linux-gnu

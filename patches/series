@@ -1,0 +1,3 @@
+# Applied in order by `eg.py prepare`. Every patch needs the header described in
+# docs/design.md §5.3. Keep this list short: it is Evergreen's rebase cost.
+0001-register-evergreen-component.patch

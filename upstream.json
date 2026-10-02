@@ -1,0 +1,13 @@
+{
+  "firefox": {
+    "version": "157.0",
+    "sha512": null
+  },
+  "archive": "https://archive.mozilla.org/pub/firefox/releases/",
+  "mirror": "https://raw.githubusercontent.com/mozilla-firefox/firefox/",
+  "release_key": {
+    "primary": "14F26682D0916CDD81E37B6D61B7B526D98F0353",
+    "signing_subkeys": ["827E658608679618CD349F93678E455D76767AA3"],
+    "source": "Mozilla Security Blog, 2026-08-10: 'Updated GPG key for signing Firefox and Thunderbird releases'. The primary key is unchanged; the signing subkey was rotated and the previous subkey revoked."
+  }
+}

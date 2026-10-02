@@ -1,0 +1,6 @@
+# Patches must keep LF endings or they will not apply on Windows checkouts.
+*.patch text eol=lf
+*.mozconfig text eol=lf
+*.sh text eol=lf
+*.ico binary
+*.png binary
