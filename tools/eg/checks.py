@@ -12,7 +12,9 @@ typos within seconds.
 
 from __future__ import annotations
 
+import os
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -26,15 +28,24 @@ def mirror_url(up: Upstream, ref: str, path: str) -> str:
     return f"{up.mirror.rstrip('/')}/{ref}/{path}"
 
 
-def fetch_mirror_file(up: Upstream, ref: str, path: str) -> str | None:
-    req = urllib.request.Request(mirror_url(up, ref, path), headers={"User-Agent": "evergreen-eg"})
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            return resp.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return None
-        raise EgError(f"Mirror request failed for {path}: {e}") from e
+def fetch_mirror_file(up: Upstream, ref: str, path: str, attempts: int = 5) -> str | None:
+    headers = {"User-Agent": "evergreen-eg"}
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"  # higher rate limits in CI
+    req = urllib.request.Request(mirror_url(up, ref, path), headers=headers)
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return resp.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            if e.code in (429, 500, 502, 503) and attempt < attempts - 1:
+                time.sleep(2 ** (attempt + 1))  # 2, 4, 8, 16 s
+                continue
+            raise EgError(f"Mirror request failed for {path}: {e}") from e
+    return None
 
 
 def check_patches_against_mirror(up: Upstream, ref: str | None = None) -> None:

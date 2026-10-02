@@ -122,6 +122,11 @@ class Run:
             "\n".join(
                 [
                     f'user_pref("marionette.port", {self.port});',
+                    # Marionette's "recommended" automation prefs turn tracking
+                    # protection off as user values, which makes Firefox
+                    # classify the profile as "custom" ETP before Evergreen's
+                    # first run. Keep the profile like a real user's.
+                    'user_pref("remote.prefs.recommended", false);',
                     # Test-only: the local page server is plain HTTP on localhost.
                     'user_pref("dom.security.https_only_mode", false);',
                     'user_pref("network.trr.mode", 5);',

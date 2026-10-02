@@ -132,21 +132,47 @@ def find_gpg() -> str | None:
     return None
 
 
+def is_msys_gpg(gpg: str) -> bool:
+    """Git for Windows ships an MSYS2 build of gpg, which only understands
+    POSIX-style paths such as /c/Users/... ."""
+    if not sys.platform.startswith("win"):
+        return False
+    try:
+        out = subprocess.run([gpg, "--version"], capture_output=True, text=True).stdout
+    except OSError:
+        return False
+    return any(line.startswith("Home: /") for line in out.splitlines())
+
+
+def gpg_path(path: Path | str, msys: bool) -> str:
+    """Spell a path the way this gpg build expects it."""
+    path = Path(path)
+    if not msys:
+        return str(path)
+    resolved = path.resolve()
+    drive = resolved.drive.rstrip(":").lower()
+    rest = resolved.as_posix()[len(resolved.drive):]
+    return f"/{drive}{rest}" if drive else rest
+
+
 def gpg_verify(gpg: str, key: Path, sig: Path, data: Path, up: Upstream) -> str:
     """Verify `sig` over `data` with an isolated keyring holding only `key`.
 
     Returns the signing subkey fingerprint. Raises EgError unless the signature
     is good and made by a pinned subkey of the pinned primary key.
     """
+    msys = is_msys_gpg(gpg)
     with tempfile.TemporaryDirectory(prefix="eg-gnupg-") as home:
-        env = dict(os.environ, GNUPGHOME=home)
-        subprocess.run(
-            [gpg, "--batch", "--quiet", "--import", str(key)],
-            env=env, check=True, capture_output=True,
+        base = [gpg, "--batch", "--homedir", gpg_path(home, msys)]
+        imported = subprocess.run(
+            [*base, "--quiet", "--import", gpg_path(key, msys)],
+            capture_output=True, text=True,
         )
+        if imported.returncode != 0:
+            raise EgError(f"gpg could not import {key.name}:\n{imported.stderr.strip()}")
         result = subprocess.run(
-            [gpg, "--batch", "--status-fd", "1", "--verify", str(sig), str(data)],
-            env=env, capture_output=True, text=True,
+            [*base, "--status-fd", "1", "--verify", gpg_path(sig, msys), gpg_path(data, msys)],
+            capture_output=True, text=True,
         )
     status = result.stdout
     bad = [s for s in BAD_STATUS if f"[GNUPG:] {s}" in status]

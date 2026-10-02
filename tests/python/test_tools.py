@@ -148,6 +148,11 @@ class UpstreamTest(unittest.TestCase):
         sums = upstream.parse_sums("ABC  source/firefox-157.0.source.tar.xz\ndef *KEY\n\n")
         self.assertEqual(sums, {"source/firefox-157.0.source.tar.xz": "abc", "KEY": "def"})
 
+    def test_gpg_path(self):
+        self.assertEqual(upstream.gpg_path(Path("/tmp/x"), msys=False), str(Path("/tmp/x")))
+        if sys.platform.startswith("win"):
+            self.assertEqual(upstream.gpg_path(Path(r"C:\\Users\\a b\\k"), msys=True), "/c/Users/a b/k")
+
     def test_parse_validsig(self):
         status = (
             "[GNUPG:] GOODSIG 1234 Someone\n"
@@ -178,11 +183,12 @@ class GpgVerifyTest(unittest.TestCase):
         cls.tmp = Path(tempfile.mkdtemp())
         home = cls.tmp / "gnupg"
         home.mkdir(mode=0o700)
-        env = dict(os.environ, GNUPGHOME=str(home))
         gpg = upstream.find_gpg()
+        msys = upstream.is_msys_gpg(gpg)
+        cls.p = staticmethod(lambda path: upstream.gpg_path(path, msys))
 
         def run(*args):
-            result = subprocess.run([gpg, "--batch", "--yes", *args], env=env,
+            result = subprocess.run([gpg, "--batch", "--yes", "--homedir", cls.p(home), *args],
                                     capture_output=True, text=True)
             if result.returncode:
                 raise RuntimeError(f"gpg {' '.join(args)} failed:\n{result.stderr}")
@@ -200,7 +206,7 @@ class GpgVerifyTest(unittest.TestCase):
         cls.data = cls.tmp / "SHA512SUMS"
         cls.data.write_text("abc  source/x.tar.xz\n")
         run(*nopin, "--armor", "--detach-sign",
-            "-o", str(cls.tmp / "SHA512SUMS.asc"), str(cls.data))
+            "-o", cls.p(cls.tmp / "SHA512SUMS.asc"), cls.p(cls.data))
         (cls.tmp / "KEY").write_text(run("--armor", "--export", cls.primary).stdout)
 
     @classmethod
