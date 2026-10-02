@@ -500,7 +500,7 @@ Mozilla, is not built.
 
 ### 8.2 Default preferences
 
-`prefs/evergreen.js` holds 60 defaults. `eg.py check-prefs` verifies every one
+`prefs/evergreen.js` holds 63 defaults. `eg.py check-prefs` verifies every one
 exists in the pinned Firefox, so typos and removed prefs are caught.
 Highlights:
 
@@ -534,7 +534,10 @@ that real enterprise deployments need.
   groups and smart window off. Users can re-enable individual features
   (on-device translations are a good candidate).
 - **Crash reports**: crash reporter not built.
-- **Firefox onboarding**: off; Evergreen will ship its own.
+- **Firefox onboarding**: off; Evergreen will ship its own. Mozilla's
+  first-run Terms of Use modal and data-collection privacy notice describe
+  Mozilla's Firefox, not Evergreen, and are skipped (non-official builds
+  already skip the Terms of Use modal).
 
 ### 8.4 Security services we keep on
 
@@ -644,7 +647,7 @@ builder. Until then, each release records the toolchain and source hashes.
 |---|---|---|
 | Lint | ESLint incl. `no-unsanitized` on all privileged code | `npm run lint` |
 | UI unit tests | Spaces model, archive policy, search defaults (24 tests) | `npm test` |
-| Tooling tests | Prefs parser, patch lint, real GPG verification with pinned keys, full prepare pipeline on a fake tarball, dev harness (20 tests) | `python -m unittest discover -s tests/python` |
+| Tooling tests | Prefs parser, patch lint, real GPG verification with pinned keys, full prepare pipeline on a fake tarball, dev harness (21 tests) | `python -m unittest discover -s tests/python` |
 | Patch / pref checks | Patches apply and prefs exist in the pinned Firefox | `eg.py check-patches`, `eg.py check-prefs` |
 | **Smoke test** | Evergreen running in a real Firefox: prefs applied, first run (ETP Strict, Ecosia), Spaces and containers, Ctrl+T container, switching, keyboard shortcut, moving tabs across identities, auto-archive, Archive panel, history clearing, editor, restart persistence, deleting Spaces, private windows, no console errors (16 checks) | `python tests/smoke/smoke_test.py` |
 | Prefs audit *(M0)* | Starts the *packaged* build and checks every default and build protection | — |
@@ -653,7 +656,8 @@ builder. Until then, each release records the toolchain and source hashes.
 
 CI runs lint, unit tests, tooling tests, patch and pref checks on every push,
 and the smoke test in the Firefox installed on GitHub's Windows and Linux
-runners.
+runners (Firefox 156 at the time of writing; the smoke test also passes on
+Firefox 136).
 
 ---
 
