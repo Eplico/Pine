@@ -69,7 +69,11 @@ const evergreenConsoleErrors = () => {
   let apiErrors = Cc["@mozilla.org/consoleAPI-storage;1"].getService(Ci.nsIConsoleAPIStorage)
     .getEvents().filter(e => e.level == "error")
     .map(e => `${e.filename}:${e.lineNumber} ` + e.arguments.map(a => String(a?.message ?? a)).join(" "));
-  return [...scriptErrors, ...apiErrors].filter(s => /evergreen/i.test(s));
+  // Evergreen's modules: moz-src:///browser/components/evergreen/ in a build,
+  // resource://evergreen/ in the dev harness. (Not just /evergreen/: a build's
+  // install directory is itself called evergreen.)
+  return [...scriptErrors, ...apiErrors]
+    .filter(s => s.includes("components/evergreen/") || s.includes("resource://evergreen/"));
 };
 """
 

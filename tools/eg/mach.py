@@ -47,31 +47,31 @@ def build(tree: Path, faster: bool = False) -> None:
 
 
 def stage_distribution(tree: Path) -> None:
-    """Copy bundled extensions into the build output before packaging."""
+    """Copy bundled extensions into the build output before packaging.
+
+    Patch 0002 adds distribution/extensions/* to Firefox's package manifest,
+    which fails packaging if nothing is there, so this requires them.
+    """
     dest = tree / OBJDIR_NAME / "dist" / "bin" / "distribution" / "extensions"
     xpis = bundled_xpis()
     if not xpis:
-        print("  (no pinned extensions to bundle; run `eg.py fetch-extensions --pin`)")
-        return
-    dest.mkdir(parents=True, exist_ok=True)
+        raise EgError("No bundled extensions are pinned; run `eg.py fetch-extensions --pin` first.")
+    shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True)
     for ext_id, path in xpis:
         shutil.copyfile(path, dest / f"{ext_id}.xpi")
-        print(f"  bundled {ext_id}")
+        print(f"  bundled {ext_id}", flush=True)
 
 
-def package(tree: Path, installer: bool) -> None:
-    """The portable package (zip on Windows) and, optionally, the installer."""
+def package(tree: Path) -> None:
+    """Package the build: a zip (Windows) or tarball, and on Windows the installer.
+
+    On Windows, Firefox's `make package` builds the NSIS installer from the zip
+    as part of packaging (toolkit/mozapps/installer/packager.mk), so both land
+    in obj-evergreen/dist/.
+    """
     stage_distribution(tree)
     run_mach(tree, ["package"])
-    if installer and sys.platform.startswith("win"):
-        build_installer(tree)
-
-
-def build_installer(tree: Path) -> None:
-    """The Windows installer (an NSIS setup .exe), from an already packaged build."""
-    if not sys.platform.startswith("win"):
-        raise EgError("The installer can only be built on Windows.")
-    run_mach(tree, ["build", "installer"])
 
 
 def run(tree: Path, extra: list[str]) -> None:

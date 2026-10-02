@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
 import os
 import shutil
@@ -14,6 +15,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -21,7 +23,7 @@ REPO = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 sys.path.insert(0, str(REPO / "tools"))
 
-from eg import config, dev, patches, prefs, prepare, upstream  # noqa: E402
+from eg import config, dev, patches, prefs, prepare, release, upstream  # noqa: E402
 from eg.config import EgError, ReleaseKey, Upstream  # noqa: E402
 
 
@@ -250,6 +252,7 @@ class PrepareTest(unittest.TestCase):
         files = {
             "mach": "#!/usr/bin/env python3\n",
             "browser/components/moz.build": (FIXTURES / "browser-components-moz.build").read_text(),
+            "browser/installer/package-manifest.in": (FIXTURES / "browser-installer-package-manifest.in").read_text(),
             "browser/branding/unofficial/configure.sh": "MOZ_APP_DISPLAYNAME=Nightly\n",
             "browser/branding/unofficial/locales/en-US/brand.ftl": "-brand-short-name = Nightly\n",
             "browser/branding/unofficial/firefox.ico": "upstream icon",
@@ -264,6 +267,8 @@ class PrepareTest(unittest.TestCase):
     def test_prepare_and_refresh(self):
         tree = prepare.prepare(self.up, self.tarball, "windows")
         self.assertIn('"evergreen",', (tree / "browser/components/moz.build").read_text())
+        self.assertTrue((tree / "browser/installer/package-manifest.in").read_text()
+                        .endswith("@RESPATH@/distribution/extensions/*\n"))
         comp = tree / "browser/components/evergreen"
         self.assertTrue((comp / "EvergreenWindow.sys.mjs").exists())
         branding_prefs = (tree / prepare.BRANDING_PREFS).read_text()
@@ -319,6 +324,55 @@ class DevHarnessTest(unittest.TestCase):
         self.assertEqual(dev.Layout(root, "linux").pref_dir, root / "defaults" / "pref")
         mac = dev.Layout(Path("/Applications/Firefox.app"), "macos")
         self.assertEqual(mac.cfg, Path("/Applications/Firefox.app/Contents/Resources/evergreen-dev.cfg"))
+
+
+class ReleaseTest(unittest.TestCase):
+    """Collecting `mach package` output, laid out as Firefox 157 does on Windows."""
+
+    def make_dist(self, root: Path, members=("evergreen/evergreen.exe", "evergreen/xul.dll")) -> Path:
+        dist = root / "tree" / "obj-evergreen" / "dist"
+        dist.mkdir(parents=True)
+        base = "evergreen-157.0.en-US.win64"
+        with zipfile.ZipFile(dist / f"{base}.zip", "w") as z:
+            for name in members:
+                z.writestr(name, "x")
+        (dist / f"{base}.installer.exe").write_bytes(b"MZ")
+        (dist / f"{base}.installer-stub.exe").write_bytes(b"MZ")
+        (dist / "package_name.txt").write_text(f"{base}.zip\n", encoding="utf-8")
+        return dist
+
+    def test_find_packages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dist = self.make_dist(Path(tmp))
+            found = release.find_packages(Path(tmp) / "tree")
+            self.assertEqual(found["archive"], dist / "evergreen-157.0.en-US.win64.zip")
+            self.assertEqual(found["installer"], dist / "evergreen-157.0.en-US.win64.installer.exe")
+            # Without package_name.txt, only a Firefox-style package name matches.
+            (dist / "package_name.txt").unlink()
+            (dist / "evergreen-157.0.en-US.win64.xpt_artifacts.zip").write_bytes(b"")
+            self.assertEqual(release.find_packages(Path(tmp) / "tree")["archive"].name,
+                             "evergreen-157.0.en-US.win64.zip")
+
+    def test_collect(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.make_dist(Path(tmp))
+            out = Path(tmp) / "release"
+            with contextlib.redirect_stdout(io.StringIO()):
+                written = release.collect(Path(tmp) / "tree", make_upstream(), "windows", "7", out)
+            self.assertEqual(
+                [p.name for p in written],
+                ["Evergreen-157.0-7-win64-portable.zip", "Evergreen-157.0-7-win64-setup.exe", "SHA256SUMS.txt"],
+            )
+            sums = (out / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(sums), 2)
+            self.assertTrue(sums[1].endswith("  Evergreen-157.0-7-win64-setup.exe"))
+
+    def test_collect_rejects_wrong_layout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.make_dist(Path(tmp), members=("firefox/firefox.exe",))
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(EgError, "top level: firefox"):
+                release.collect(Path(tmp) / "tree", make_upstream(), "windows", "1", Path(tmp) / "release")
+            self.assertFalse((Path(tmp) / "release").exists())
 
 
 if __name__ == "__main__":

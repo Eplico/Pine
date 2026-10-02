@@ -67,11 +67,7 @@ def cmd_build(args) -> None:
 
 
 def cmd_package(args) -> None:
-    mach.package(_tree(), installer=not args.no_installer)
-
-
-def cmd_installer(args) -> None:
-    mach.build_installer(_tree())
+    mach.package(_tree())
 
 
 def cmd_collect(args) -> None:
@@ -142,11 +138,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--faster", action="store_true", help="front-end only rebuild (mach build faster)")
     s.set_defaults(func=cmd_build)
 
-    s = sub.add_parser("package", help="package the build (and the Windows installer)")
-    s.add_argument("--no-installer", action="store_true")
-    s.set_defaults(func=cmd_package)
-
-    sub.add_parser("installer", help="build the Windows installer from the package").set_defaults(func=cmd_installer)
+    sub.add_parser(
+        "package", help="package the build: zip/tarball, and the installer on Windows"
+    ).set_defaults(func=cmd_package)
 
     s = sub.add_parser("collect", help="copy packages to release names with SHA256SUMS")
     s.add_argument("--out", required=True, help="output directory")

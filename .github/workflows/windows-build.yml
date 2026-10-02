@@ -2,7 +2,12 @@
 # the installer and a portable zip as a GitHub release.
 #
 # Runs on GitHub's Windows runners (no Evergreen servers involved). A build
-# from scratch takes a few hours; sccache keeps later builds faster.
+# from scratch takes about two hours; sccache makes later builds faster.
+#
+# Two jobs: `build` compiles and packages, then uploads the packages;
+# `test-and-publish` smoke-tests the packaged browser and publishes it. To
+# re-test or re-publish an earlier build without compiling again, run the
+# workflow with `from_run` set to that run's ID.
 name: Windows build
 
 on:
@@ -16,11 +21,16 @@ on:
         description: "Evergreen build number (default: the workflow run number)"
         required: false
         default: ""
+      from_run:
+        description: "Skip the build: test and publish the packages of this earlier run ID"
+        required: false
+        default: ""
   push:
-    tags: ["v*"]
+    tags: ["v*"]  # v<firefox version>-<build>, e.g. v157.0-3
 
 permissions:
   contents: write  # to publish releases
+  actions: read    # to download packages from an earlier run (from_run)
 
 concurrency:
   group: windows-build-${{ github.ref }}
@@ -33,17 +43,35 @@ defaults:
 env:
   EG_WORK_DIR: C:\eg
   MOZBUILD_STATE_PATH: C:\mozbuild
-  EG_EXTRA_MOZCONFIG: ${{ github.workspace }}\mozconfigs\ci.mozconfig
-  EG_BUILD: ${{ inputs.build || github.run_number }}
-  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   build:
     name: Build Evergreen for Windows
+    if: ${{ !inputs.from_run }}
     runs-on: windows-latest
     timeout-minutes: 355
+    env:
+      EG_EXTRA_MOZCONFIG: ${{ github.workspace }}\mozconfigs\ci.mozconfig
+      SCCACHE_GHA_ENABLED: "true"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Release version
+        env:
+          INPUT_BUILD: ${{ inputs.build }}
+        run: |
+          $firefox = (Get-Content upstream.json | ConvertFrom-Json).firefox.version
+          $build = $env:INPUT_BUILD
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            if ($env:GITHUB_REF_NAME -notmatch "^v$([regex]::Escape($firefox))-(\d+)$") {
+              throw "Tag $env:GITHUB_REF_NAME does not match v$firefox-<build> (upstream.json pins Firefox $firefox)"
+            }
+            $build = $Matches[1]
+          }
+          if (-not $build) { $build = $env:GITHUB_RUN_NUMBER }
+          if ($build -notmatch '^\d+$') { throw "Build number must be a number, got '$build'" }
+          "EG_BUILD=$build" >> $env:GITHUB_ENV
+          "Evergreen $firefox-$build"
 
       - name: Runner resources
         run: |
@@ -86,30 +114,17 @@ jobs:
           CHERE_INVOKING: "1"
         run: C:\mozilla-build\msys2\usr\bin\bash.exe --login -c "python3 eg.py build"
 
-      - name: Package (portable zip)
+      # On Windows, Firefox's `make package` builds the portable zip and,
+      # from it, the NSIS installer.
+      - name: Package (portable zip and installer)
         shell: cmd
         env:
           MOZILLABUILD: C:\mozilla-build\
           CHERE_INVOKING: "1"
-        run: C:\mozilla-build\msys2\usr\bin\bash.exe --login -c "python3 eg.py package --no-installer"
-
-      - name: Installer
-        id: installer
-        continue-on-error: true
-        shell: cmd
-        env:
-          MOZILLABUILD: C:\mozilla-build\
-          CHERE_INVOKING: "1"
-        run: C:\mozilla-build\msys2\usr\bin\bash.exe --login -c "python3 eg.py installer"
+        run: C:\mozilla-build\msys2\usr\bin\bash.exe --login -c "python3 eg.py package"
 
       - name: Collect release files
         run: python eg.py collect --platform windows --build $env:EG_BUILD --out release
-
-      - name: Smoke test the built browser
-        run: |
-          $zip = Get-ChildItem release\*-portable.zip | Select-Object -First 1
-          Expand-Archive $zip.FullName -DestinationPath C:\eg\pkg -Force
-          python tests/smoke/smoke_test.py --binary C:\eg\pkg\evergreen\evergreen.exe --headless --screenshots smoke-screenshots
 
       - name: Upload release files
         uses: actions/upload-artifact@v4
@@ -118,36 +133,108 @@ jobs:
           path: release/
           if-no-files-found: error
 
+      - name: Gather diagnostics
+        if: always()
+        run: |
+          New-Item -ItemType Directory -Force diagnostics | Out-Null
+          $tree = Get-ChildItem C:\eg\src -Directory -Filter "firefox-*" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($tree) {
+            Copy-Item "$($tree.FullName)\mozconfig" diagnostics\ -ErrorAction SilentlyContinue
+            Copy-Item "$($tree.FullName)\obj-evergreen\config.log" diagnostics\ -ErrorAction SilentlyContinue
+            Get-ChildItem "$($tree.FullName)\obj-evergreen\dist" -ErrorAction SilentlyContinue |
+              Format-Table Name, Length -AutoSize | Out-String -Width 200 | Set-Content diagnostics\dist-listing.txt
+          }
+
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: diagnostics
+          name: build-diagnostics
+          path: diagnostics/
+          if-no-files-found: ignore
+
+  test-and-publish:
+    name: Smoke test and publish
+    needs: build
+    if: ${{ always() && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.from_run != '')) }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download the packages
+        uses: actions/download-artifact@v4
+        with:
+          name: evergreen-windows
+          path: release
+          run-id: ${{ inputs.from_run || github.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Keep Windows Defender out of the test directory
+        run: |
+          New-Item -ItemType Directory -Force C:\eg | Out-Null
+          Add-MpPreference -ExclusionPath 'C:\eg' -ErrorAction SilentlyContinue
+
+      - name: Smoke test the packaged browser
+        run: |
+          Get-ChildItem release | Format-Table Name, Length -AutoSize
+          $zip = Get-ChildItem release\*-portable.zip | Select-Object -First 1
+          if (-not $zip) { throw "No portable zip among the packages" }
+          python -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" $zip.FullName C:\eg\pkg
+          $exe = Get-Item C:\eg\pkg\evergreen\evergreen.exe -ErrorAction SilentlyContinue
+          if (-not $exe) {
+            Get-ChildItem C:\eg\pkg -Recurse -Depth 1 | Select-Object -ExpandProperty FullName
+            throw "evergreen\evergreen.exe is not in $($zip.Name)"
+          }
+          "Bundled extensions:"
+          Get-ChildItem C:\eg\pkg\evergreen\distribution\extensions -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+          python tests/smoke/smoke_test.py --binary $exe.FullName --headless --screenshots C:\eg\dev\screenshots
+
+      - name: Upload smoke-test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-diagnostics
           path: |
-            smoke-screenshots/
+            C:\eg\dev\screenshots\
             C:\eg\dev\smoke-firefox.log
-            C:\eg\src\*\mozconfig
-            C:\eg\src\*\obj-evergreen\config.log
           if-no-files-found: ignore
 
       - name: Publish GitHub release
         if: success() && (github.event_name == 'push' || inputs.publish)
         env:
           GH_TOKEN: ${{ github.token }}
+          FROM_RUN: ${{ inputs.from_run }}
         run: |
-          $firefox = (Get-Content upstream.json | ConvertFrom-Json).firefox.version
-          $version = "$firefox-$env:EG_BUILD"
+          $zip = Get-ChildItem release\*-win64-portable.zip | Select-Object -First 1
+          $version = $zip.Name -replace '^Evergreen-(.+)-win64-portable\.zip$', '$1'
+          $firefox = $version -replace '-\d+$', ''
+          # The commit the packages were built from.
+          $sha = $env:GITHUB_SHA
+          if ($env:FROM_RUN) {
+            $sha = gh run view $env:FROM_RUN --repo $env:GITHUB_REPOSITORY --json headSha --jq .headSha
+          }
+          $runId = if ($env:FROM_RUN) { $env:FROM_RUN } else { $env:GITHUB_RUN_ID }
           $notes = (Get-Content .github\release-notes.md -Raw) `
             -replace '@VERSION@', $version `
             -replace '@FIREFOX@', $firefox `
-            -replace '@SHA@', $env:GITHUB_SHA `
+            -replace '@SHA@', $sha `
             -replace '@REPO_URL@', "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY" `
-            -replace '@RUN_URL@', "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" `
+            -replace '@RUN_URL@', "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$runId" `
             -replace '@SHA256SUMS@', (Get-Content release\SHA256SUMS.txt -Raw).Trim()
           if (-not (Test-Path release\*-setup.exe)) {
-            # The installer step failed (it is allowed to); do not advertise it.
+            # No installer among the packages; do not advertise one.
             $notes = $notes -replace '(?m)^\| `Evergreen-[^`]*-setup\.exe`.*\r?\n', ''
           }
           Set-Content -Path release-notes.md -Value $notes -Encoding utf8
           $files = Get-ChildItem release\* | ForEach-Object { $_.FullName }
-          gh release create "v$version" @files --title "Evergreen $version for Windows (preview)" --notes-file release-notes.md --prerelease --target $env:GITHUB_SHA
+          $title = "Evergreen $version for Windows (preview)"
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            gh release create $env:GITHUB_REF_NAME @files --title $title --notes-file release-notes.md --prerelease --verify-tag
+          } else {
+            gh release create "v$version" @files --title $title --notes-file release-notes.md --prerelease --target $sha
+          }

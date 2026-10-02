@@ -1,0 +1,14 @@
+; Excerpt of Firefox 157.0 browser/installer/package-manifest.in (MPL-2.0), for tests.
+
+#ifdef MOZ_ARTIFACT_BUILDS
+; Test workers unpack artifact build packages and need `jogfile.json`
+@RESPATH@/jogfile.json
+#endif
+
+#if defined(DESKTOP_LAUNCHER_ENABLED)
+@BINPATH@/desktop-launcher/desktop-launcher@BIN_SUFFIX@
+#endif
+
+#if defined(BUILT_BY_MOZILLA)
+@RESPATH@/distribution/*
+#endif

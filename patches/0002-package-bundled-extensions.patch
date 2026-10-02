@@ -1,0 +1,18 @@
+Evergreen-Patch: package-bundled-extensions
+Why: Firefox packages the distribution/ directory only in Mozilla's own
+  builds (--built-by-mozilla). Evergreen bundles uBlock Origin there
+  (`eg.py fetch-extensions`, staged by `eg.py package`); Firefox installs
+  extensions from distribution/extensions into each new profile.
+Upstream: not upstreamable (Mozilla's packaging choice for its own builds)
+Drop-when: Evergreen stops bundling extensions
+Owner: Evergreen maintainers
+
+--- a/browser/installer/package-manifest.in
++++ b/browser/installer/package-manifest.in
+@@ -461,3 +461,6 @@
+ #if defined(BUILT_BY_MOZILLA)
+ @RESPATH@/distribution/*
+ #endif
++
++; Evergreen: extensions bundled by `eg.py package` (uBlock Origin).
++@RESPATH@/distribution/extensions/*

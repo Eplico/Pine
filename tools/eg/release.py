@@ -4,18 +4,23 @@
 
 """Collect the packaged build into release files with checksums.
 
-After `eg.py package` (and, on Windows, `eg.py installer`), Firefox's build
-leaves its packages in obj-evergreen/dist/. `eg.py collect` copies them under
-release names and writes SHA256SUMS.txt next to them.
+After `eg.py package`, Firefox's build leaves its packages in
+obj-evergreen/dist/: the archive (evergreen-<version>.<locale>.<platform>.zip
+on Windows) and, on Windows, the installer next to it
+(<same name>.installer.exe). `eg.py collect` checks the archive's layout,
+copies both under release names and writes SHA256SUMS.txt next to them.
 """
 
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
+import tarfile
+import zipfile
 from pathlib import Path
 
-from .config import EgError, Upstream
+from .config import APP_NAME, EgError, Upstream
 from .mach import OBJDIR_NAME
 
 PLATFORM_SUFFIX = {"windows": "win64", "linux": "linux-x86_64", "macos": "mac"}
@@ -34,26 +39,66 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+ARCHIVE_SUFFIXES = (".zip", ".tar.xz", ".tar.bz2", ".dmg")
+# Firefox's package name: <app>-<version>.<locale>.<platform><suffix>
+# (toolkit/mozapps/installer/package-name.mk).
+PACKAGE_RE = re.compile(
+    rf"^{APP_NAME}-[0-9][0-9A-Za-z.]*\.[A-Za-z-]+\.[a-z0-9_-]+(?:\.zip|\.tar\.xz|\.tar\.bz2|\.dmg)$"
+)
+
+
+def _strip_suffix(name: str) -> str:
+    for suffix in ARCHIVE_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
 def find_packages(tree: Path) -> dict[str, Path]:
-    """The portable archive and (if built) the installer in the build output."""
+    """The portable archive and (on Windows) the installer in the build output."""
     dist = tree / OBJDIR_NAME / "dist"
     found: dict[str, Path] = {}
-    archives = sorted(
-        p for pattern in ("evergreen-*.zip", "evergreen-*.tar.xz", "evergreen-*.tar.bz2", "evergreen-*.dmg")
-        for p in dist.glob(pattern)
-    )
-    if archives:
-        found["archive"] = archives[0]
-    installers = sorted((dist / "install" / "sea").glob("*.exe"))
-    if installers:
-        found["installer"] = installers[0]
+    # `make package` records the archive's name in dist/package_name.txt.
+    name_file = dist / "package_name.txt"
+    if name_file.is_file():
+        archive = dist / name_file.read_text(encoding="utf-8").strip()
+        if archive.is_file():
+            found["archive"] = archive
+    if "archive" not in found and dist.is_dir():
+        archives = sorted(p for p in dist.iterdir() if p.is_file() and PACKAGE_RE.match(p.name))
+        if archives:
+            found["archive"] = archives[0]
+    if "archive" in found:
+        installer = dist / f"{_strip_suffix(found['archive'].name)}.installer.exe"
+        if installer.is_file():
+            found["installer"] = installer
     return found
+
+
+def check_archive(archive: Path, platform: str) -> None:
+    """The archive must hold <app>/<app>(.exe), as the release notes promise."""
+    if archive.name.endswith(".dmg"):
+        return
+    binary = f"{APP_NAME}/{APP_NAME}" + (".exe" if platform == "windows" else "")
+    if archive.suffix == ".zip":
+        with zipfile.ZipFile(archive) as z:
+            names = z.namelist()
+    else:
+        with tarfile.open(archive) as t:
+            names = [n.removeprefix("./") for n in t.getnames()]
+    if binary not in names:
+        top = sorted({n.split("/", 1)[0] for n in names})[:20]
+        raise EgError(
+            f"{archive.name} has no {binary} ({len(names)} entries; top level: {', '.join(top) or 'none'})"
+        )
 
 
 def collect(tree: Path, up: Upstream, platform: str, build: str, out: Path) -> list[Path]:
     packages = find_packages(tree)
     if "archive" not in packages:
         raise EgError(f"No packaged build in {tree / OBJDIR_NAME / 'dist'}; run `eg.py package`.")
+    print(f"  package: {packages['archive']}")
+    check_archive(packages["archive"], platform)
     version = release_version(up, build)
     suffix = PLATFORM_SUFFIX[platform]
     out.mkdir(parents=True, exist_ok=True)

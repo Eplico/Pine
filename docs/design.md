@@ -208,7 +208,7 @@ tests/                     # unit/ (Node), python/ (tooling), smoke/ (Marionette
 | Rung | Mechanism | Rebase cost | Examples |
 |---|---|---|---|
 | 1 | **Build configuration** (`mozconfigs/`) | ~none | branding, app name, update channel, crash reporter off |
-| 2 | **Default prefs** (`prefs/evergreen.js`, shipped as `defaults/preferences/evergreen.js`; Firefox reads that directory in reverse alphabetical order, so it loads after `firefox.js` and wins) | very low | hardening, telemetry off, vertical tabs on |
+| 2 | **Default prefs** (`prefs/evergreen.js`, appended by `eg.py prepare` to Evergreen's branding prefs file `firefox-branding.js`; Firefox reads `defaults/preferences` in reverse alphabetical order, so it loads after `firefox.js` and wins, and the package manifest always includes it) | very low | hardening, telemetry off, vertical tabs on |
 | 3 | **New files** (`src/` overlay) | low; breaks only if an API we call changes | Evergreen UI modules, CSS, Fluent strings, tests |
 | 4 | **Patches to upstream files** | high; can conflict every release | hook points that new files cannot provide |
 
@@ -237,7 +237,8 @@ documented patch.
 - **Upstream what we can.** If a hook is useful beyond Evergreen, file it
   upstream and record the bug number.
 - **Budget: ≤ 30 patches and ≤ 2,000 changed upstream lines at v1.0.**
-  `eg.py status` and `eg.py lint` report it. **Current: 1 patch, 1 line.**
+  `eg.py status` and `eg.py lint` report it. **Current: 2 patches, 4 lines**
+  (registering Evergreen's component; packaging the bundled extensions).
 
 ### 5.4 Tracking upstream
 
@@ -586,10 +587,10 @@ flowchart LR
   C --> D{Signed by pinned<br/>key + subkey,<br/>hash matches?}
   D -- no --> X[Stop]
   D -- yes --> E[prepare: extract, patch,<br/>overlay, branding, prefs]
-  E --> F[mach build + package<br/>on the developer's PC]
-  F --> G[Tests: smoke test, prefs audit,<br/>egress test]
-  G --> H[Sign separately]
-  H --> I[GitHub release: installer,<br/>update files, checksums]
+  E --> F[mach build + package<br/>on a Windows runner or PC]
+  F --> G[Smoke test the built<br/>evergreen.exe]
+  G --> H[Sign separately<br/>(M3)]
+  H --> I[GitHub release: installer,<br/>portable zip, checksums]
 ```
 
 - **Source verification.** `SHA512SUMS` must carry a valid signature from the
@@ -600,10 +601,20 @@ flowchart LR
   carry the revocation. The tarball hash is then pinned in `upstream.json`
   (`eg.py fetch --pin`), so machines without `gpg` verify against a hash that
   was itself established by a signature check.
-- **Where builds run.** On the developer's own Windows PC, from the
-  MozillaBuild shell (`eg.py bootstrap`, `eg.py build`). CI runs only fast
-  checks and the smoke test; no build servers are needed (principle 6).
-- **Versions.** `evergreen 157.0-1` is Firefox 157.0 plus Evergreen build 1.
+- **Where builds run.** Release builds run in the *Windows build* workflow
+  (`.github/workflows/windows-build.yml`) on GitHub's hosted Windows runners:
+  it installs MozillaBuild, fetches and verifies the source, builds, packages
+  a portable zip and an NSIS installer, smoke-tests the built `evergreen.exe`,
+  and publishes a GitHub release. Developers can run the same steps on their
+  own PC. Evergreen operates no build or update servers (principle 6).
+- **Build settings.** `mozconfigs/common.mozconfig` + the platform file, plus
+  `mozconfigs/ci.mozconfig` in CI (no test programs, no debug symbols, and
+  sccache to speed up rebuilds). `--enable-bootstrap` downloads Mozilla's
+  toolchains, so no Visual Studio install is needed.
+- **Versions.** Evergreen `157.0-12` is Firefox 157.0 plus Evergreen build 12;
+  the release tag is `v157.0-12`. The build number is the workflow run
+  number, the number given when starting the workflow, or the one in a
+  pushed tag.
 
 ### 9.2 Signing and keys
 
@@ -620,7 +631,7 @@ from building, on a machine that receives only the build outputs.
 
 | Platform | Packages | Notes |
 |---|---|---|
-| **Windows** (first) | Signed installer | x86-64 first; arm64 later |
+| **Windows** (first) | Installer (`-setup.exe`) and portable zip, on GitHub releases | x86-64 first; arm64 later. **Not code-signed yet**, so SmartScreen warns on first run |
 | Linux | Tarball | The tarball is the reference security configuration; inside Flatpak, Firefox cannot use the user namespaces its Linux sandbox relies on |
 | macOS | Signed, notarized DMG | Later |
 
@@ -631,8 +642,9 @@ from building, on a machine that receives only the build outputs.
 - **Static update files on GitHub releases**, no update server.
 - The update request sends only what is needed to choose a package (version,
   platform, channel).
-- Until the updater is set up (M3), Evergreen is updated by installing a new
-  release.
+- Until the updater is set up (M3), builds use `--disable-updater` (so
+  nothing asks Mozilla's update server about a product it does not know) and
+  Evergreen is updated by installing a new release.
 
 ### 9.5 Reproducibility
 
@@ -665,10 +677,10 @@ Firefox 136).
 
 | Milestone | Scope | Status |
 |---|---|---|
-| **M0 Foundations** | Build tooling, source verification, branding, prefs, uBO bundling, CI; first real Windows build; prefs audit and egress test; arkenfox/LibreWolf prefs review | Tooling and CI done; **first real build pending** |
+| **M0 Foundations** | Build tooling, source verification, branding, prefs, uBO bundling, CI; Windows release builds; prefs audit and egress test; arkenfox/LibreWolf prefs review | Tooling, CI and the Windows build workflow done; prefs audit and egress test pending |
 | **M1 Sidebar & Spaces** | Sidebar, Spaces with sign-in identities, Favorites, kept tabs, Archive | **Prototype done** (dev harness, smoke-tested); next: folders, navigation in the sidebar, polish |
 | **M2 Multitasking** | Split view integration, command bar, Peek, mini window, link routing | Not started |
-| **M3 Ship** | Windows installer signing, MAR updates via GitHub releases, security review, public beta | Not started |
+| **M3 Ship** | Code signing, MAR updates via GitHub releases, security review, public beta | Unsigned preview releases only |
 | **Later** | Linux and macOS packages, CSS-only Boosts, 4-pane split (upstream-first), isolated-profile Spaces | — |
 
 ---
@@ -680,7 +692,7 @@ Firefox 136).
 | — | Base | Thin patch layer on upstream Firefox (not a Zen fork, not an extension) |
 | — | Channel | Firefox Release |
 | Q1 | Platform order | **Windows first**; tooling, mozconfigs and CI stay cross-platform |
-| Q2 | Build infrastructure | **No servers.** Builds run on the developer's PC; CI does fast checks only; releases and update files are static GitHub release assets |
+| Q2 | Build infrastructure | **No servers of our own.** Release builds run on GitHub's hosted Windows runners (or a developer's PC); downloads and future update files are static GitHub release assets |
 | Q3 | Default search | **Ecosia**; Google and DuckDuckGo one click away; custom engines supported; suggestions off until opted in |
 | Q4 | DNS over HTTPS | Quad9, fallback mode; strict mode available |
 | Q5 | Safe Browsing key | Evergreen is a non-commercial personal project, so Google's free Safe Browsing API terms apply. Revisit if that changes (commercial use requires the paid Web Risk API) |
