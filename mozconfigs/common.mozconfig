@@ -7,12 +7,18 @@
 ac_add_options --enable-application=browser
 mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-evergreen
 
-# Identity: our own branding, binary name and profile location, so Evergreen
-# never shares a profile with an installed Firefox.
+# Identity: our own branding, binary name (evergreen.exe) and profile location
+# (%APPDATA%\Mozilla\Evergreen), so Evergreen never shares a profile with an
+# installed Firefox. (The vendor stays "Mozilla": since Firefox 157 it can only
+# be changed by patching browser/moz.configure.)
 ac_add_options --with-branding=browser/branding/evergreen
 ac_add_options --with-app-name=evergreen
 ac_add_options --with-app-basename=Evergreen
-export MOZ_APP_VENDOR=Evergreen
+
+# Download Mozilla's own toolchains (clang, Rust, the Windows SDK, NSIS, the
+# WASI sysroot for sandboxed libraries...) into ~/.mozbuild. Release source
+# tarballs do not do this by default.
+ac_add_options --enable-bootstrap
 
 # Release configuration.
 ac_add_options --enable-update-channel=release
@@ -28,6 +34,11 @@ export MOZ_REQUIRE_SIGNING=1
 # not compiled in because MOZILLA_OFFICIAL is not set: do not set it, it also
 # switches on Mozilla's own reporting endpoints.
 ac_add_options --disable-crashreporter
+
+# No updater until Evergreen has its own signed update files (milestone M3).
+# Firefox's updater would otherwise ask Mozilla's update server about a
+# product it does not know. Updating = installing a newer release.
+ac_add_options --disable-updater
 
 # Performance (not security): PGO + LTO make release builds faster but take
 # much longer to build. Enable for published releases (milestone M3):

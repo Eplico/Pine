@@ -1,0 +1,16 @@
+# Extra settings for release builds made by CI (.github/workflows/windows-build.yml),
+# added with EG_EXTRA_MOZCONFIG. They make a from-scratch build fit in a
+# GitHub-hosted runner's time and disk budget without changing what ships.
+
+# Test programs and test-only libraries are not part of the package.
+ac_add_options --disable-tests
+
+# Debug symbols are only useful for crash reports, which Evergreen does not
+# collect (--disable-crashreporter). Skipping them saves many GB and link time.
+ac_add_options --disable-debug-symbols
+
+# Compiler cache shared between CI runs (mozilla-actions/sccache-action sets
+# SCCACHE_PATH). Speeds up rebuilds; it never changes the output.
+if [ -n "$SCCACHE_PATH" ]; then
+  ac_add_options --with-ccache="$SCCACHE_PATH"
+fi

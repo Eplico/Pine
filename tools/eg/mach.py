@@ -60,10 +60,18 @@ def stage_distribution(tree: Path) -> None:
 
 
 def package(tree: Path, installer: bool) -> None:
+    """The portable package (zip on Windows) and, optionally, the installer."""
     stage_distribution(tree)
     run_mach(tree, ["package"])
     if installer and sys.platform.startswith("win"):
-        run_mach(tree, ["build", "installer"])
+        build_installer(tree)
+
+
+def build_installer(tree: Path) -> None:
+    """The Windows installer (an NSIS setup .exe), from an already packaged build."""
+    if not sys.platform.startswith("win"):
+        raise EgError("The installer can only be built on Windows.")
+    run_mach(tree, ["build", "installer"])
 
 
 def run(tree: Path, extra: list[str]) -> None:

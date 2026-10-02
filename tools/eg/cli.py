@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
-from . import checks, dev, extensions, mach, prepare, upstream
+from . import checks, dev, extensions, mach, prepare, release, upstream
 from . import patches as patchlib
 from .config import PREFS_FILE, EgError, host_platform, load_upstream, work_dir
 from .prefs import load_prefs
@@ -67,6 +68,16 @@ def cmd_build(args) -> None:
 
 def cmd_package(args) -> None:
     mach.package(_tree(), installer=not args.no_installer)
+
+
+def cmd_installer(args) -> None:
+    mach.build_installer(_tree())
+
+
+def cmd_collect(args) -> None:
+    up = load_upstream()
+    print("Collecting release files")
+    release.collect(_tree(), up, args.platform or host_platform(), args.build, Path(args.out))
 
 
 def cmd_run(args) -> None:
@@ -134,6 +145,14 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("package", help="package the build (and the Windows installer)")
     s.add_argument("--no-installer", action="store_true")
     s.set_defaults(func=cmd_package)
+
+    sub.add_parser("installer", help="build the Windows installer from the package").set_defaults(func=cmd_installer)
+
+    s = sub.add_parser("collect", help="copy packages to release names with SHA256SUMS")
+    s.add_argument("--out", required=True, help="output directory")
+    s.add_argument("--build", default="1", help="Evergreen build number (default 1)")
+    s.add_argument("--platform", choices=PLATFORMS, help="target platform (default: host)")
+    s.set_defaults(func=cmd_collect)
 
     s = sub.add_parser("run", help="run the built browser (mach run)")
     s.add_argument("extra", nargs=argparse.REMAINDER)

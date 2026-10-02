@@ -4,7 +4,8 @@
 
 // Evergreen default preferences (design doc §8.2).
 //
-// Shipped as defaults/preferences/evergreen.js, which Firefox loads after its
+// `eg.py prepare` appends this file to Evergreen's branding prefs file
+// (defaults/preferences/firefox-branding.js), which Firefox loads after its
 // own firefox.js, so these values win. Users can still change any of them.
 //
 // Format rules (enforced by `eg.py lint`): one `pref("name", value);` per

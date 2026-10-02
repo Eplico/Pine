@@ -24,8 +24,6 @@ EXTRA_COMPONENTS += [
     "Evergreen.manifest",
 ]
 
-# prefs/evergreen.js, copied here by `eg.py prepare`. Installed as
-# defaults/preferences/evergreen.js, which Firefox loads after firefox.js.
-JS_PREFERENCE_FILES += [
-    "evergreen.js",
-]
+# Evergreen's default prefs (prefs/evergreen.js) are not installed from here:
+# `eg.py prepare` appends them to the branding prefs file, which Firefox
+# always packages.

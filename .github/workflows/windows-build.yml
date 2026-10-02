@@ -1,0 +1,153 @@
+# Builds Evergreen for Windows from the pinned Firefox source and publishes
+# the installer and a portable zip as a GitHub release.
+#
+# Runs on GitHub's Windows runners (no Evergreen servers involved). A build
+# from scratch takes a few hours; sccache keeps later builds faster.
+name: Windows build
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a GitHub release when the build and smoke test pass"
+        type: boolean
+        default: true
+      build:
+        description: "Evergreen build number (default: the workflow run number)"
+        required: false
+        default: ""
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write  # to publish releases
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+env:
+  EG_WORK_DIR: C:\eg
+  MOZBUILD_STATE_PATH: C:\mozbuild
+  EG_EXTRA_MOZCONFIG: ${{ github.workspace }}\mozconfigs\ci.mozconfig
+  EG_BUILD: ${{ inputs.build || github.run_number }}
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  build:
+    name: Build Evergreen for Windows
+    runs-on: windows-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Runner resources
+        run: |
+          Get-CimInstance Win32_Processor | Select-Object Name, NumberOfLogicalProcessors | Format-List
+          "{0:N1} GB RAM" -f ((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name, @{n='Free GB'; e={[math]::Round($_.Free / 1GB, 1)}}
+
+      - name: Keep Windows Defender out of the build directories
+        run: |
+          New-Item -ItemType Directory -Force C:\eg, C:\mozbuild | Out-Null
+          Add-MpPreference -ExclusionPath 'C:\eg', 'C:\mozbuild', 'C:\mozilla-build' -ErrorAction SilentlyContinue
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install MozillaBuild (Mozilla's Windows build environment)
+        run: |
+          $setup = "$env:RUNNER_TEMP\MozillaBuildSetup.exe"
+          Invoke-WebRequest https://ftp.mozilla.org/pub/mozilla/libraries/win32/MozillaBuildSetup-Latest.exe -OutFile $setup
+          Start-Process -FilePath $setup -ArgumentList '/S', '/D=C:\mozilla-build' -Wait
+          if (-not (Test-Path C:\mozilla-build\msys2\usr\bin\bash.exe)) { throw "MozillaBuild did not install" }
+          Get-Content C:\mozilla-build\VERSION -ErrorAction SilentlyContinue
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Fetch and verify the Firefox source
+        run: python eg.py fetch
+
+      - name: Prepare the Evergreen source tree
+        run: python eg.py prepare --platform windows
+
+      - name: Fetch uBlock Origin (bundled)
+        run: python eg.py fetch-extensions --pin
+
+      - name: Build
+        shell: cmd
+        env:
+          MOZILLABUILD: C:\mozilla-build\
+          CHERE_INVOKING: "1"
+        run: C:\mozilla-build\msys2\usr\bin\bash.exe --login -c "python3 eg.py build"
+
+      - name: Package (portable zip)
+        shell: cmd
+        env:
+          MOZILLABUILD: C:\mozilla-build\
+          CHERE_INVOKING: "1"
+        run: C:\mozilla-build\msys2\usr\bin\bash.exe --login -c "python3 eg.py package --no-installer"
+
+      - name: Installer
+        id: installer
+        continue-on-error: true
+        shell: cmd
+        env:
+          MOZILLABUILD: C:\mozilla-build\
+          CHERE_INVOKING: "1"
+        run: C:\mozilla-build\msys2\usr\bin\bash.exe --login -c "python3 eg.py installer"
+
+      - name: Collect release files
+        run: python eg.py collect --platform windows --build $env:EG_BUILD --out release
+
+      - name: Smoke test the built browser
+        run: |
+          $zip = Get-ChildItem release\*-portable.zip | Select-Object -First 1
+          Expand-Archive $zip.FullName -DestinationPath C:\eg\pkg -Force
+          python tests/smoke/smoke_test.py --binary C:\eg\pkg\evergreen\evergreen.exe --headless --screenshots smoke-screenshots
+
+      - name: Upload release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: evergreen-windows
+          path: release/
+          if-no-files-found: error
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics
+          path: |
+            smoke-screenshots/
+            C:\eg\dev\smoke-firefox.log
+            C:\eg\src\*\mozconfig
+            C:\eg\src\*\obj-evergreen\config.log
+          if-no-files-found: ignore
+
+      - name: Publish GitHub release
+        if: success() && (github.event_name == 'push' || inputs.publish)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $firefox = (Get-Content upstream.json | ConvertFrom-Json).firefox.version
+          $version = "$firefox-$env:EG_BUILD"
+          $notes = (Get-Content .github\release-notes.md -Raw) `
+            -replace '@VERSION@', $version `
+            -replace '@FIREFOX@', $firefox `
+            -replace '@SHA@', $env:GITHUB_SHA `
+            -replace '@REPO_URL@', "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY" `
+            -replace '@RUN_URL@', "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" `
+            -replace '@SHA256SUMS@', (Get-Content release\SHA256SUMS.txt -Raw).Trim()
+          if (-not (Test-Path release\*-setup.exe)) {
+            # The installer step failed (it is allowed to); do not advertise it.
+            $notes = $notes -replace '(?m)^\| `Evergreen-[^`]*-setup\.exe`.*\r?\n', ''
+          }
+          Set-Content -Path release-notes.md -Value $notes -Encoding utf8
+          $files = Get-ChildItem release\* | ForEach-Object { $_.FullName }
+          gh release create "v$version" @files --title "Evergreen $version for Windows (preview)" --notes-file release-notes.md --prerelease --target $env:GITHUB_SHA

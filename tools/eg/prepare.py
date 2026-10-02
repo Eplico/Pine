@@ -11,15 +11,17 @@ Steps, in order (design doc §5.2):
      because that would be an undocumented patch)
   4. create browser/branding/evergreen from Firefox's unofficial branding plus
      branding/evergreen/
-  5. install prefs/evergreen.js into the Evergreen component
+  5. append prefs/evergreen.js to the branding prefs file (see install_prefs)
   6. write the mozconfig for the target platform
 """
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
@@ -36,7 +38,6 @@ from .config import (
 from .prefs import load_prefs
 
 STATE_FILE = ".eg-state.json"
-EVERGREEN_COMPONENT = Path("browser/components/evergreen")
 
 
 def tree_dir(up: Upstream) -> Path:
@@ -62,20 +63,25 @@ def extract(tarball: Path, up: Upstream) -> Path:
     if dest.exists():
         print(f"Removing previous tree {dest}")
         shutil.rmtree(dest)
-    staging = dest.with_name(dest.name + ".extracting")
+    # Short staging name: Firefox's tree is deep and Windows paths are limited.
+    staging = dest.parent / f".x-{up.version}"
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
     print(f"Extracting {tarball.name} (this takes a few minutes)")
     tar_tool = shutil.which("tar")
-    if tar_tool:
-        # System tar (bsdtar on Windows 10+, GNU tar elsewhere) is much faster.
+    if tar_tool and not sys.platform.startswith("win"):
+        # GNU tar / bsdtar is much faster than Python's tarfile.
         result = subprocess.run([tar_tool, "-xf", str(tarball), "-C", str(staging)])
         if result.returncode != 0:
             raise EgError("tar failed to extract the source tarball")
     else:
+        # On Windows, Python's tarfile copes with symlinks (it copies the target
+        # when symlinks cannot be created) and with drive-letter paths, which
+        # Git's GNU tar would misread as a remote host.
+        extra = {"filter": "tar"} if hasattr(tarfile, "tar_filter") else {}
         with tarfile.open(tarball) as tar:
-            tar.extractall(staging, members=_safe_members(tar, staging))
+            tar.extractall(staging, members=_safe_members(tar, staging), **extra)
     tops = [p for p in staging.iterdir()]
     if len(tops) != 1 or not tops[0].is_dir():
         raise EgError(f"Unexpected tarball layout: {[p.name for p in tops]}")
@@ -127,20 +133,40 @@ def make_branding(tree: Path) -> list[str]:
     return copied
 
 
+BRANDING_PREFS = Path("browser/branding/evergreen/pref/firefox-branding.js")
+
+
 def install_prefs(tree: Path) -> str:
+    """Append prefs/evergreen.js to the branding prefs file.
+
+    Firefox's package manifest lists default-pref files by name, so a separate
+    evergreen.js would be left out of the package. The branding prefs file is
+    Evergreen's own, is always packaged, and loads after firefox.js (Firefox
+    reads defaults/preferences in reverse alphabetical order), so the values
+    still win.
+    """
     load_prefs(PREFS_FILE)  # validate syntax before shipping it
-    rel = (EVERGREEN_COMPONENT / "evergreen.js").as_posix()
-    shutil.copyfile(PREFS_FILE, tree / rel)
-    return rel
+    branding = BRANDING_DIR / "pref" / "firefox-branding.js"
+    combined = (
+        branding.read_text(encoding="utf-8").rstrip()
+        + "\n\n// ---- Evergreen defaults, appended by eg.py from prefs/evergreen.js ----\n\n"
+        + PREFS_FILE.read_text(encoding="utf-8")
+    )
+    (tree / BRANDING_PREFS).write_text(combined, encoding="utf-8")
+    return BRANDING_PREFS.as_posix()
 
 
 def mozconfig_for(platform: str) -> str:
+    """common + platform mozconfig, plus EG_EXTRA_MOZCONFIG (e.g. CI settings)."""
+    paths = [MOZCONFIGS_DIR / "common.mozconfig", MOZCONFIGS_DIR / f"{platform}.mozconfig"]
+    extra = os.environ.get("EG_EXTRA_MOZCONFIG")
+    if extra:
+        paths.append(Path(extra))
     parts = []
-    for name in ("common.mozconfig", f"{platform}.mozconfig"):
-        path = MOZCONFIGS_DIR / name
+    for path in paths:
         if not path.exists():
-            raise EgError(f"No mozconfig for platform '{platform}' ({path})")
-        parts.append(f"# --- {name} ---\n" + path.read_text(encoding="utf-8"))
+            raise EgError(f"mozconfig not found: {path}")
+        parts.append(f"# --- {path.name} ---\n" + path.read_text(encoding="utf-8"))
     return "\n".join(parts)
 
 

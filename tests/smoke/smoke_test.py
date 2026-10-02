@@ -5,13 +5,14 @@
 
 """End-to-end smoke test: Evergreen's UI running inside a real Firefox.
 
-Uses the dev harness (`eg.py dev`) to load Evergreen into a copy of an
-installed Firefox, drives it over Marionette, and checks Spaces, containers,
-archiving, history wiping, persistence across a restart, private windows and
-the default prefs.
+Either loads Evergreen into a copy of an installed Firefox with the dev
+harness (`eg.py dev`), or tests a real Evergreen build (--binary). Drives the
+browser over Marionette and checks Spaces, containers, archiving, history
+wiping, persistence across a restart, private windows and the default prefs.
 
   python tests/smoke/smoke_test.py --firefox "C:\\Program Files\\Mozilla Firefox"
   python tests/smoke/smoke_test.py --firefox /usr/lib/firefox --screenshots out/
+  python tests/smoke/smoke_test.py --binary C:\\eg\\pkg\\evergreen\\evergreen.exe
 
 Exit status is non-zero if any check fails.
 """
@@ -42,9 +43,9 @@ from marionette import Marionette, MarionetteError  # noqa: E402
 # Runs in Firefox's chrome context before every check: shared helpers.
 PRELUDE = """
 const w = Services.wm.getMostRecentWindow("navigator:browser");
-const { EvergreenWindow } = ChromeUtils.importESModule("resource://evergreen/EvergreenWindow.sys.mjs");
-const { ArchiveStore } = ChromeUtils.importESModule("resource://evergreen/ArchiveStore.sys.mjs");
-const { SpacesStore } = ChromeUtils.importESModule("resource://evergreen/SpacesStore.sys.mjs");
+const { EvergreenWindow } = ChromeUtils.importESModule("@BASE@EvergreenWindow.sys.mjs");
+const { ArchiveStore } = ChromeUtils.importESModule("@BASE@ArchiveStore.sys.mjs");
+const { SpacesStore } = ChromeUtils.importESModule("@BASE@SpacesStore.sys.mjs");
 const c = EvergreenWindow.controllerFor(w);
 const gB = w.gBrowser;
 const sleep = ms => new Promise(r => w.setTimeout(r, ms));
@@ -112,10 +113,23 @@ class Run:
         if self.shots:
             self.shots.mkdir(parents=True, exist_ok=True)
         platform = host_platform()
-        install = egdev._find_install(args.firefox, platform)
-        self.layout = egdev.ensure_copy(install, platform)
-        egdev.install_harness(self.layout)
-        self.version = egdev.build_info(self.layout)[0]
+        if args.binary:
+            # A real Evergreen build: its modules are compiled in at moz-src:///.
+            self.binary = Path(args.binary).resolve()
+            if not self.binary.is_file():
+                raise SystemExit(f"No browser binary at {self.binary}")
+            self.module_base = "moz-src:///browser/components/evergreen/"
+            self.version = egdev.build_info(egdev.Layout(self.binary.parent, "linux"))[0]
+            self.product = "Evergreen"
+        else:
+            # The dev harness: a copy of an installed Firefox loading src/ from the repo.
+            install = egdev._find_install(args.firefox, platform)
+            layout = egdev.ensure_copy(install, platform)
+            egdev.install_harness(layout)
+            self.binary = layout.binary
+            self.module_base = "resource://evergreen/"
+            self.version = egdev.build_info(layout)[0]
+            self.product = "Firefox (dev harness)"
         self.profile = egdev.dev_root() / "smoke-profile"
         shutil.rmtree(self.profile, ignore_errors=True)
         self.profile.mkdir(parents=True)
@@ -154,9 +168,8 @@ class Run:
     # --- process control ---------------------------------------------------------
 
     def launch(self):
-        cmd = egdev.launch_command(
-            self.layout, self.profile, ["--marionette", "-remote-allow-system-access"]
-        )
+        cmd = [str(self.binary), "-profile", str(self.profile), "-no-remote",
+               "--marionette", "-remote-allow-system-access"]
         env = dict(os.environ, MOZ_CRASHREPORTER_DISABLE="1")
         if self.args.headless:
             cmd.append("-headless")
@@ -199,7 +212,8 @@ class Run:
                         time.sleep(0.5)
 
     def js(self, body: str, *args):
-        script = "return (async () => {\n" + PRELUDE + "\n" + body + "\n})();"
+        code = (PRELUDE + "\n" + body).replace("@BASE@", self.module_base)
+        script = "return (async () => {\n" + code + "\n})();"
         return self.m.execute(script, list(args), timeout_ms=60000)
 
     def shot(self, name: str):
@@ -220,7 +234,7 @@ class Run:
             print(f"FAIL  {name}: script error: {e}")
 
     def run(self):
-        print(f"Firefox {self.version}, profile {self.profile}")
+        print(f"{self.product} {self.version}, profile {self.profile}")
         self.launch()
         a, b, c_, d = (self.server.url(p) for p in "abcd")
 
@@ -266,7 +280,7 @@ class Run:
                   .catch(e => { throw new Error(e.message + " / " + evergreenConsoleErrors().join(" / ")); });
                 await until(() => Services.prefs.getBoolPref("evergreen.defaults.strictTrackingProtectionApplied", false), 20000);
                 await sleep(500);
-                let { getSearchService } = ChromeUtils.importESModule("resource://evergreen/EvergreenStartup.sys.mjs");
+                let { getSearchService } = ChromeUtils.importESModule("@BASE@EvergreenStartup.sys.mjs");
                 let search = getSearchService().service;
                 let engine = await search.getDefault();
                 return {
@@ -576,7 +590,8 @@ class Run:
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--firefox", help="Firefox install directory (default: standard location)")
+    p.add_argument("--firefox", help="Firefox install directory for the dev harness (default: standard location)")
+    p.add_argument("--binary", help="test a built Evergreen instead (path to evergreen.exe / evergreen)")
     p.add_argument("--headless", action="store_true", help="run Firefox with -headless")
     p.add_argument("--screenshots", help="directory to save screenshots in")
     args = p.parse_args()

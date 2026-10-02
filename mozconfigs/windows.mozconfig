@@ -8,7 +8,6 @@ ac_add_options --target=x86_64-pc-windows-msvc
 # the default back to Mozilla. Evergreen does not ship it.
 ac_add_options --disable-default-browser-agent
 
-# Updates (milestone M3): the Mozilla Maintenance Service only accepts updates
-# signed by Mozilla, so Evergreen will need its own MAR keys and a decision on
-# whether to ship a privileged update service at all. Until then, update with
-# a new installer.
+# The Mozilla Maintenance Service is not built: it follows --disable-updater
+# (common.mozconfig). Whether Evergreen ships a privileged update service at
+# all is an open decision for milestone M3.

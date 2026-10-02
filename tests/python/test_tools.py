@@ -266,7 +266,10 @@ class PrepareTest(unittest.TestCase):
         self.assertIn('"evergreen",', (tree / "browser/components/moz.build").read_text())
         comp = tree / "browser/components/evergreen"
         self.assertTrue((comp / "EvergreenWindow.sys.mjs").exists())
-        self.assertEqual((comp / "evergreen.js").read_text(), config.PREFS_FILE.read_text())
+        branding_prefs = (tree / prepare.BRANDING_PREFS).read_text()
+        self.assertTrue(branding_prefs.startswith((config.BRANDING_DIR / "pref/firefox-branding.js").read_text().rstrip()))
+        self.assertTrue(branding_prefs.endswith(config.PREFS_FILE.read_text()))
+        self.assertFalse((comp / "evergreen.js").exists())
         self.assertTrue((tree / "browser/locales/en-US/browser/evergreen.ftl").exists())
         brand = tree / "browser/branding/evergreen"
         self.assertIn("Evergreen", (brand / "configure.sh").read_text())
