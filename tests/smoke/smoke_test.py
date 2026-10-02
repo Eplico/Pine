@@ -641,6 +641,140 @@ class Run:
             assert r == {"evergreen": False, "header": False}, r
             return "no Spaces UI or persistence in private windows"
 
+        def toolbar():
+            r = self.js(
+                """
+                await sleep(300);
+                let d = w.document;
+                let rect = id => d.getElementById(id)?.getBoundingClientRect();
+                let visible = [...d.getElementById("nav-bar").querySelectorAll(":scope > *, #nav-bar-customization-target > *")]
+                  .filter(e => e.id && e.id != "nav-bar-customization-target" && e.getBoundingClientRect().width > 0)
+                  .map(e => e.id);
+                return { visible, back: rect("back-button")?.left, page: rect("tabbrowser-tabbox").left,
+                  icon: w.getComputedStyle(d.querySelector("#PanelUI-menu-button .toolbarbutton-icon")).listStyleImage.slice(0, 30) };
+                """
+            )
+            v = r["visible"]
+            assert v[:3] == ["PanelUI-button", "sidebar-button", "downloads-button"], r
+            assert v.index("back-button") == 3, f"navigation should follow Downloads: {r}"
+            assert v.index("unified-extensions-button") > v.index("urlbar-container"), r
+            assert abs(r["back"] - r["page"]) <= 2, f"Back should line up with the page edge: {r}"
+            assert "data:image/svg" in r["icon"], r
+            return f"aligned at x={round(r['page'])}"
+
+        def sizes():
+            r = self.js(
+                """
+                let d = w.document, root = d.documentElement;
+                let measure = async () => { await sleep(150); return {
+                  nav: d.getElementById("nav-bar").getBoundingClientRect().height,
+                  sidebar: c.layout.sidebarContainer.getBoundingClientRect().width }; };
+                root.setAttribute("evergreen-natural-sizes", "true");
+                let natural = await measure();
+                root.removeAttribute("evergreen-natural-sizes");
+                let evergreen = await measure();
+                return { natural, evergreen, major: parseInt(Services.appinfo.version) };
+                """
+            )
+            nav = r["evergreen"]["nav"] / r["natural"]["nav"]
+            side = r["evergreen"]["sidebar"] / r["natural"]["sidebar"]
+            detail = f"toolbar {r['natural']['nav']:.0f} -> {r['evergreen']['nav']:.0f}px ({nav:.0%}), " \
+                     f"sidebar {r['natural']['sidebar']:.0f} -> {r['evergreen']['sidebar']:.0f}px ({side:.0%})"
+            if r["major"] < 150:
+                return detail + " (sizes are tuned for Firefox 150+; not checked)"
+            assert 0.74 <= nav <= 0.86, detail
+            assert 0.60 <= side <= 0.72, detail
+            return detail
+
+        def sidebar_collapse():
+            r = self.js(
+                """
+                let d = w.document, root = d.documentElement;
+                let container = c.layout.sidebarContainer;
+                let rect = e => e.getBoundingClientRect();
+                let tabbox = d.getElementById("tabbrowser-tabbox");
+                w.SidebarController.handleToolbarButtonClick();
+                await sleep(400);
+                let collapsed = { attr: root.hasAttribute("evergreen-sidebar-collapsed"),
+                  sidebarRight: rect(container).right, page: rect(tabbox).left, pageWidth: rect(tabbox).width,
+                  backAfterDownloads: rect(d.getElementById("back-button")).left - rect(d.getElementById("downloads-button")).right,
+                  button: d.getElementById("sidebar-button").checked };
+                // The edge reveals it over the page.
+                d.getElementById("evergreen-sidebar-edge").dispatchEvent(new w.MouseEvent("mouseenter"));
+                await sleep(400);
+                let peek = { attr: root.hasAttribute("evergreen-sidebar-peek"), left: rect(container).left,
+                  width: rect(container).width, pageWidth: rect(tabbox).width };
+                // ...and it slides away when the mouse leaves.
+                container.dispatchEvent(new w.MouseEvent("mouseleave"));
+                await sleep(800);
+                let left = { peek: root.hasAttribute("evergreen-sidebar-peek"), sidebarRight: rect(container).right };
+                w.SidebarController.handleToolbarButtonClick();
+                await sleep(400);
+                let expanded = { attr: root.hasAttribute("evergreen-sidebar-collapsed"), sidebarLeft: rect(container).left,
+                  back: rect(d.getElementById("back-button")).left, page: rect(tabbox).left,
+                  button: d.getElementById("sidebar-button").checked,
+                  pref: Services.prefs.getBoolPref("evergreen.sidebar.collapsed") };
+                return { collapsed, peek, left, expanded };
+                """
+            )
+            col, peek, left, exp = r["collapsed"], r["peek"], r["left"], r["expanded"]
+            assert col["attr"] and col["sidebarRight"] <= 0 and col["page"] <= 12, r
+            assert col["backAfterDownloads"] < 16 and not col["button"], f"nav should follow Downloads: {r}"
+            assert peek["attr"] and abs(peek["left"]) < 1 and peek["width"] > 100, r
+            assert peek["pageWidth"] == col["pageWidth"], f"the page must not resize while revealed: {r}"
+            assert not left["peek"] and left["sidebarRight"] <= 0, r
+            assert not exp["attr"] and exp["sidebarLeft"] == 0 and abs(exp["back"] - exp["page"]) <= 2, r
+            assert exp["button"] and exp["pref"] is False, r
+            return "collapses fully; the left edge slides it over the page"
+
+        def sidebar_shortcut():
+            mods = ["\ue009"] if sys.platform == "darwin" else ["\ue009", "\ue00a"]  # Ctrl(+Alt)+Z
+            down = [{"type": "keyDown", "value": m} for m in mods]
+            up = [{"type": "keyUp", "value": m} for m in reversed(mods)]
+            actions = [{"type": "key", "id": "kbd", "actions": down + [
+                {"type": "keyDown", "value": "z"}, {"type": "keyUp", "value": "z"}] + up}]
+            has_key = self.js("return !!w.document.getElementById('toggleSidebarKb');")
+            if not has_key:
+                return "no sidebar shortcut in this Firefox; skipped"
+            self.m.command("WebDriver:PerformActions", {"actions": actions})
+            self.m.command("WebDriver:ReleaseActions")
+            r = self.js("await sleep(300); return c.layout.collapsed;")
+            assert r, "the sidebar shortcut should collapse the sidebar"
+            self.shot("sidebar-collapsed")
+            self.js("c.layout.peek(); await sleep(400);")
+            self.shot("sidebar-peek")
+            self.js("c.layout.setCollapsed(false); await sleep(300);")
+            return "Ctrl+Alt+Z collapses it"
+
+        def rename():
+            r = self.js(
+                """
+                let d = w.document;
+                let id = c.activeSpace().id;
+                d.getElementById("evergreen-space-name").click();
+                let input = d.getElementById("evergreen-space-name-input");
+                let focused = d.activeElement == input;
+                input.value = "  Home  ";
+                input.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+                await sleep(100);
+                let saved = { name: SpacesStore.state.spaces.find(s => s.id == id).name,
+                  shown: d.getElementById("evergreen-space-name").textContent,
+                  inputGone: !d.getElementById("evergreen-space-name-input") };
+                d.getElementById("evergreen-space-name").click();
+                input = d.getElementById("evergreen-space-name-input");
+                input.value = "Nope";
+                input.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+                await sleep(100);
+                let cancelled = SpacesStore.state.spaces.find(s => s.id == id).name;
+                c.editSpace(id, { name: "" });
+                return { focused, saved, cancelled };
+                """
+            )
+            assert r["focused"], r
+            assert r["saved"] == {"name": "Home", "shown": "Home", "inputGone": True}, r
+            assert r["cancelled"] == "Home", r
+            return "click, type, Enter; Escape cancels"
+
         def console_errors():
             r = self.js("return evergreenConsoleErrors();")
             assert not r, "\n  " + "\n  ".join(r)
@@ -662,6 +796,11 @@ class Run:
         self.check("Spaces and tab assignment survive a restart", persistence)
         self.check("deleting Spaces", delete_space)
         self.check("private windows stay plain", private_window)
+        self.check("toolbar: tree menu, sidebar, Downloads, then navigation at the page edge", toolbar)
+        self.check("toolbar about 20% thinner, sidebar about two thirds as wide", sizes)
+        self.check("sidebar collapses and the left edge reveals it", sidebar_collapse)
+        self.check("sidebar keyboard shortcut", sidebar_shortcut)
+        self.check("rename a Space by clicking its name", rename)
         self.check("no Evergreen errors in the console", console_errors)
         self.quit()
         print(f"\n{len(self.failures)} failed" if self.failures else "\nAll checks passed")

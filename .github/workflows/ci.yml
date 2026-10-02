@@ -91,10 +91,7 @@ jobs:
         shell: bash
         run: |
           args=(--headless --screenshots smoke-screenshots)
-          if [ -n "${FIREFOX_DIR:-}" ]; then
-            # Small JPEG screenshots in the log too, readable without the artifact.
-            args+=(--firefox "$FIREFOX_DIR" --log-screenshots)
-          fi
+          if [ -n "${FIREFOX_DIR:-}" ]; then args+=(--firefox "$FIREFOX_DIR"); fi
           python tests/smoke/smoke_test.py "${args[@]}"
       - name: Upload screenshots and Firefox log
         if: always()

@@ -13,6 +13,7 @@ MOZ_SRC_FILES += [
     "Archive.sys.mjs",
     "ArchiveStore.sys.mjs",
     "evergreen.css",
+    "EvergreenLayout.sys.mjs",
     "EvergreenStartup.sys.mjs",
     "EvergreenWindow.sys.mjs",
     "SearchDefaults.sys.mjs",

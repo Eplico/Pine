@@ -25,6 +25,7 @@ import * as Spaces from "./Spaces.sys.mjs";
 import { isArchivable, isRecordable, makeEntry } from "./Archive.sys.mjs";
 import { ArchiveStore, archiveSettings } from "./ArchiveStore.sys.mjs";
 import { SpacesStore } from "./SpacesStore.sys.mjs";
+import { WindowLayout, applyToolbarLayout } from "./EvergreenLayout.sys.mjs";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const STYLESHEET = new URL("evergreen.css", import.meta.url).href;
@@ -34,6 +35,9 @@ const TAB_SPACE = "evergreen-space"; // SessionStore tab value + tab attribute
 const TAB_KEEP = "evergreen-keep"; // SessionStore tab value + tab attribute
 const WINDOW_SPACE = "evergreen-active-space"; // SessionStore window value
 const HIDDEN_BY = "evergreen";
+// Applied once per profile; bump to apply a changed toolbar layout again.
+const TOOLBAR_LAYOUT_PREF = "evergreen.defaults.toolbarLayout";
+const TOOLBAR_LAYOUT_VERSION = 1;
 
 // Space colour -> Firefox container colour.
 const CONTAINER_COLORS = {
@@ -161,10 +165,14 @@ class WindowController {
     this.defaultName =
       (await doc.l10n.formatValue("evergreen-default-space-name")) || this.defaultName;
 
+    this.applyToolbarLayoutOnce();
     this.buildSidebar();
     this.buildPopups();
     this.buildKeys();
     this.wrapNewTabLoading();
+    this.layout = new WindowLayout(win);
+    this.layout.start();
+    this._cleanups.push(() => this.layout.stop());
 
     let tabs = this.gBrowser.tabContainer;
     this.listen(tabs, "TabOpen", e => this.onTabOpen(e.target));
@@ -180,25 +188,21 @@ class WindowController {
     this._cleanups.push(() => SpacesStore.removeListener(onSpacesChanged));
 
     this.restoreWindowState();
-    this.expandSidebarOnFirstRun();
     doc.documentElement.setAttribute("evergreen", "true");
     this._cleanups.push(() => doc.documentElement.removeAttribute("evergreen"));
   }
 
-  /**
-   * Arc's sidebar starts expanded; Firefox's starts collapsed. Expand it once,
-   * on the first run; after that Firefox remembers the user's choice.
-   */
-  expandSidebarOnFirstRun() {
-    const PREF = "evergreen.sidebar.initialExpandDone";
-    if (Services.prefs.getBoolPref(PREF, false)) {
+  /** Evergreen's toolbar order (EvergreenLayout), once per profile. */
+  applyToolbarLayoutOnce() {
+    if (Services.prefs.getIntPref(TOOLBAR_LAYOUT_PREF, 0) >= TOOLBAR_LAYOUT_VERSION) {
       return;
     }
-    let state = this.win.SidebarController?._state;
-    if (state && "launcherExpanded" in state) {
-      state.launcherExpanded = true;
+    try {
+      applyToolbarLayout(this.win.CustomizableUI);
+    } catch (e) {
+      console.error("Evergreen toolbar layout", e);
     }
-    Services.prefs.setBoolPref(PREF, true);
+    Services.prefs.setIntPref(TOOLBAR_LAYOUT_PREF, TOOLBAR_LAYOUT_VERSION);
   }
 
   stop() {
@@ -621,7 +625,19 @@ class WindowController {
 
     let header = el(doc, "hbox", { id: "evergreen-space-header", align: "center" });
     let swatch = html(doc, "span", { class: "evergreen-space-swatch", "aria-hidden": "true" });
-    let name = html(doc, "span", { id: "evergreen-space-name" });
+    let name = html(doc, "span", {
+      id: "evergreen-space-name",
+      tabindex: "0",
+      role: "button",
+      "data-l10n-id": "evergreen-space-name",
+    });
+    name.addEventListener("click", () => this.startRename());
+    name.addEventListener("keydown", e => {
+      if (e.key == "Enter" || e.key == "F2") {
+        e.preventDefault();
+        this.startRename();
+      }
+    });
     let menuButton = el(doc, "toolbarbutton", {
       id: "evergreen-space-menu-button",
       class: "evergreen-icon-button",
@@ -660,6 +676,55 @@ class WindowController {
       header.remove();
       footer.remove();
     });
+  }
+
+  /** Rename the active Space in place: click its name, type, press Enter. */
+  startRename() {
+    let { doc } = this;
+    let name = doc.getElementById("evergreen-space-name");
+    if (!name || name.hidden || doc.getElementById("evergreen-space-name-input")) {
+      return;
+    }
+    let space = this.activeSpace();
+    let input = html(doc, "input", {
+      id: "evergreen-space-name-input",
+      type: "text",
+      maxlength: String(Spaces.MAX_NAME_LENGTH),
+      "data-l10n-id": "evergreen-editor-name",
+    });
+    input.value = this.displayName(space);
+    name.hidden = true;
+    name.after(input);
+    input.focus();
+    input.select();
+    let finished = false;
+    let finish = save => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      let value = Spaces.cleanName(input.value);
+      if (save && value && value != this.displayName(space) && Spaces.getSpace(this.state, space.id)) {
+        this.editSpace(space.id, { name: value });
+      }
+      let hadFocus = doc.activeElement == input;
+      input.remove();
+      name.hidden = false;
+      if (hadFocus) {
+        name.focus();
+      }
+    };
+    input.addEventListener("keydown", e => {
+      if (e.key == "Enter") {
+        e.preventDefault();
+        finish(true);
+      } else if (e.key == "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        finish(false);
+      }
+    });
+    input.addEventListener("blur", () => finish(true));
   }
 
   render() {

@@ -9,6 +9,8 @@ evergreen-default-space-name = Personal
 
 evergreen-space-menu-button =
     .tooltiptext = Space options
+evergreen-space-name =
+    .title = Rename Space
 evergreen-archive-button =
     .tooltiptext = Archived tabs
 evergreen-new-space-button =
@@ -108,3 +110,14 @@ evergreen-tab-move-to-space =
     .label = Move to Space
 evergreen-tab-keep =
     .label = Keep in Space (never archive)
+
+## Toolbar
+
+# The sidebar button. Variables:
+#   $shortcut (String) - The keyboard shortcut, e.g. "Ctrl+Alt+Z".
+evergreen-sidebar-button-hide =
+    .label = Hide sidebar
+    .tooltiptext = Hide sidebar ({ $shortcut })
+evergreen-sidebar-button-show =
+    .label = Show sidebar
+    .tooltiptext = Show sidebar ({ $shortcut })
