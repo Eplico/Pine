@@ -673,7 +673,16 @@ class Run:
                 let natural = await measure();
                 root.removeAttribute("evergreen-natural-sizes");
                 let evergreen = await measure();
-                return { natural, evergreen, major: parseInt(Services.appinfo.version) };
+                // What holds the toolbar at its height, for failure messages.
+                let nav = d.getElementById("nav-bar");
+                let tallest = [...nav.querySelectorAll("*")]
+                  .map(e => [e, e.getBoundingClientRect().height])
+                  .filter(([e, h]) => h >= evergreen.nav - 1 && e.getBoundingClientRect().width > 0)
+                  .map(([e, h]) => `${e.localName}${e.id ? "#" + e.id : ""}.${[...e.classList].join(".")}=${Math.round(h)}`)
+                  .slice(0, 12);
+                return { natural, evergreen, major: parseInt(Services.appinfo.version), tallest,
+                  window: ["sizemode", "customtitlebar", "tabsintitlebar", "inFullscreen"]
+                    .map(a => `${a}=${root.getAttribute(a)}`).join(" ") };
                 """
             )
             nav = r["evergreen"]["nav"] / r["natural"]["nav"]
@@ -682,7 +691,7 @@ class Run:
                      f"sidebar {r['natural']['sidebar']:.0f} -> {r['evergreen']['sidebar']:.0f}px ({side:.0%})"
             if r["major"] < 150:
                 return detail + " (sizes are tuned for Firefox 150+; not checked)"
-            assert 0.74 <= nav <= 0.86, detail
+            assert 0.74 <= nav <= 0.86, f"{detail}; {r['window']}; tallest in the toolbar: {r['tallest']}"
             assert 0.60 <= side <= 0.72, detail
             return detail
 
