@@ -1,20 +1,23 @@
-# Pine — Design Document
+# Evergreen — Design Document
 
 | | |
 |---|---|
-| **Status** | Draft for review |
+| **Status** | Prototype running; design under review |
 | **Last updated** | 2026-10-02 |
-| **Decisions so far** | Thin patch layer on upstream Firefox · tracks Firefox **Release** channel |
+| **Base** | Thin patch layer on upstream Firefox, **Release** channel, pinned to 157.0 |
+| **Platforms** | **Windows first**; Linux and macOS kept buildable |
+| **Repository** | `Eplico/Pine` (the repository keeps its old name; the product is Evergreen) |
 
-Pine is a security-focused desktop browser built on Firefox (Gecko) with the
-sidebar and multitasking workflow popularised by Arc: vertical tabs in a
-sidebar, Spaces, Favorites, auto-archiving "Today" tabs, split view, a command
-bar, Peek and a mini window for external links.
+Evergreen is a security-focused desktop browser built on Firefox (Gecko) with
+the sidebar and multitasking workflow popularised by Arc: vertical tabs in a
+sidebar, Spaces, Favorites, auto-archiving tabs, split view, a command bar,
+Peek and a mini window for external links.
 
 This document covers what we are building, what we are deliberately not
-building, how Pine relates to Firefox, the threat model, and how features and
-hardening are implemented. Open decisions are collected in
-[§12](#12-open-questions).
+building, how Evergreen relates to Firefox, the threat model, and how
+features and hardening are implemented. Decisions are recorded in
+[§12](#12-decisions); day-to-day instructions are in
+[development.md](development.md).
 
 ---
 
@@ -24,14 +27,14 @@ hardening are implemented. Open decisions are collected in
 2. [Background](#2-background)
 3. [Design principles](#3-design-principles)
 4. [Threat model](#4-threat-model)
-5. [Architecture: how Pine modifies Firefox](#5-architecture-how-pine-modifies-firefox)
-6. [The Pine UI layer](#6-the-pine-ui-layer)
+5. [Architecture: how Evergreen modifies Firefox](#5-architecture-how-evergreen-modifies-firefox)
+6. [The Evergreen UI layer](#6-the-evergreen-ui-layer)
 7. [Features](#7-features)
 8. [Security and privacy hardening](#8-security-and-privacy-hardening)
 9. [Release engineering](#9-release-engineering)
 10. [Testing](#10-testing)
 11. [Milestones](#11-milestones)
-12. [Open questions](#12-open-questions)
+12. [Decisions](#12-decisions)
 13. [References](#13-references)
 
 ---
@@ -43,10 +46,10 @@ hardening are implemented. Open decisions are collected in
 | # | Goal | How we measure it |
 |---|------|-------------------|
 | G1 | An Arc-style sidebar and multitasking workflow on Firefox | Feature set in [§7](#7-features) shipped and usable as a daily driver |
-| G2 | **Ship every Firefox security release fast** | Pine release within **48 h** of a Firefox release containing security fixes; **24 h** for fixes to actively exploited bugs |
-| G3 | Hardened, privacy-respecting defaults with no data collection | No telemetry; no Pine-operated service ever receives browsing data; egress test passes ([§10](#10-testing)) |
+| G2 | **Ship every Firefox security release fast** | Evergreen release within **48 h** of a Firefox release containing security fixes; **24 h** for fixes to actively exploited bugs |
+| G3 | Hardened, privacy-respecting defaults with no data collection | No telemetry; Evergreen operates no servers; egress test passes ([§10](#10-testing)) |
 | G4 | A small, auditable diff against Firefox | Patch budget in [§5.3](#53-patch-rules-and-budget) respected; every patch documented |
-| G5 | Linux, macOS and Windows desktop builds | Signed, auto-updating builds on all three |
+| G5 | **Windows first**, then Linux and macOS | Signed, updatable Windows builds; the tooling stays portable |
 
 G2 is the goal the others are traded against. A browser that ships Firefox
 security releases late is less secure than Firefox itself, regardless of how
@@ -54,16 +57,18 @@ well its prefs are hardened.
 
 ### Non-goals
 
-- **Anonymity.** Pine reduces tracking and fingerprinting but does not try to
-  make users indistinguishable from each other. People who need that should
-  use Tor Browser or Mullvad Browser.
-- **Chrome extension support.** Pine runs Firefox WebExtensions from
+- **Anonymity.** Evergreen reduces tracking and fingerprinting but does not
+  try to make users indistinguishable from each other. People who need that
+  should use Tor Browser or Mullvad Browser.
+- **Chrome extension support.** Evergreen runs Firefox WebExtensions from
   addons.mozilla.org (AMO) only.
-- **Mobile.** Desktop only for v1.
-- **Pine accounts or a Pine cloud.** No sign-in, no Pine sync service, no
-  server-side storage of Spaces, Boosts or anything else.
+- **Mobile.** Desktop only.
+- **Servers of our own.** No Evergreen accounts, no Evergreen sync, no
+  Evergreen backend of any kind. Everything that can happen on the device
+  does ([§3](#3-design-principles), principle 6).
 - **AI features.** Firefox's AI features are blocked by default
-  ([§8.3](#83-data-collection-and-sponsored-content-removed)), and Pine adds none.
+  ([§8.3](#83-data-collection-and-sponsored-content-removed)), and Evergreen
+  adds none.
 - **Engine changes.** We don't modify Gecko, SpiderMonkey, networking or the
   sandbox, except to turn on something more secure that upstream has already
   built.
@@ -82,67 +87,67 @@ acquisition by Atlassian. We are taking its interaction model, not its code.
 
 Arc also shows what can go wrong when a browser has its own cloud features:
 CVE-2024-45489 let an attacker run arbitrary JavaScript in other users'
-browsers through misconfigured Firebase access rules on **Boosts**. Pine's "no
-Pine cloud" non-goal and its handling of Boosts ([§7.9](#79-deferred-and-not-planned))
-follow from this.
+browsers through misconfigured Firebase access rules on **Boosts**.
+Evergreen's "no servers" rule and its handling of Boosts
+([§7.9](#79-deferred-and-not-planned)) follow from this.
 
 ### What Firefox already provides
 
-Upstream Firefox has gained much of the plumbing an Arc-style browser needs:
-
-| Firefox feature | Shipped in | Pine uses it for |
+| Firefox feature | Shipped in | Evergreen uses it for |
 |---|---|---|
-| Revamped sidebar + vertical tabs | 136 (Mar 2025) | Base of the Pine sidebar |
-| Tab groups | 138 | Folders inside a Space's pinned section |
+| Revamped sidebar + vertical tabs | 136 (Mar 2025) | Base of the Evergreen sidebar |
+| Tab groups | 138 | Folders inside a Space (planned) |
+| AI controls / "Block AI enhancements" | 148 | Off-by-default AI |
 | Split view (two tabs side by side) | 149 | Split view |
 | "Open Link in Split View", reverse panes | 150 (Apr 2026) | Split view |
 | Containers (contextual identities) | long-standing | Sign-in isolation between Spaces |
-| AI controls / "Block AI enhancements" | 148 | Off-by-default AI |
 
 Every feature we build on upstream is one we don't have to maintain while
 rebasing, which directly serves G2 and G4.
 
 ### Existing Firefox derivatives
 
-- **Zen Browser** (MPL-2.0) already ships an Arc-like UI on Firefox:
-  workspaces, compact mode, split view and "Glance". It is the closest
-  reference implementation. We decided **not** to fork it. Forking a fork adds
-  a second hop between a Mozilla security fix and our users, and it means
-  taking on a large UI diff we didn't design. Because Zen is MPL-2.0, we can
-  still learn from it and reuse individual files, keeping their licence
-  headers.
+- **Zen Browser** (MPL-2.0) already ships an Arc-like UI on Firefox. It is the
+  closest reference implementation. We decided **not** to fork it: forking a
+  fork adds a second hop between a Mozilla security fix and our users. Because
+  Zen is MPL-2.0, we can still learn from it and reuse individual files,
+  keeping their licence headers.
 - **LibreWolf** and **arkenfox** are the main public sources for hardened
-  Firefox defaults. Pine's preference set ([§8.2](#82-default-preferences))
-  will start from a review of both.
+  Firefox defaults. `prefs/evergreen.js` will be reviewed line by line against
+  both (milestone M0).
 
 ---
 
 ## 3. Design principles
 
-These principles are how we settle design disagreements. Where two conflict,
-the one listed first wins.
+These principles settle design disagreements. Where two conflict, the one
+listed first wins.
 
 1. **Stay close to upstream.** Use a build option or a pref before adding a
    file, and add a file before patching an upstream one. Every patch slows
    down every future security release.
-2. **Every web page is a normal Firefox tab.** Peek, Little Pine, split panes
-   and Favorites all show web content in real tabbrowser tabs, so Fission site
-   isolation, the content sandbox, Enhanced Tracking Protection (ETP),
-   containers and permissions apply to them. Pine never creates its own
-   `<browser>` elements for web content.
-3. **Pine's UI code is privileged code.** It runs in the parent process with
-   chrome privileges, so a bug in it can bypass the content sandbox. It is
-   held to the rules in [§6.2](#62-rules-for-privileged-code).
-4. **The user can always see the real origin.** Pine may hide or collapse
+2. **Every web page is a normal Firefox tab.** Peek, the mini window, split
+   panes and Favorites all show web content in real tabbrowser tabs, so
+   Fission site isolation, the content sandbox, Enhanced Tracking Protection
+   (ETP), containers and permissions apply to them. Evergreen never creates
+   its own `<browser>` elements for web content.
+3. **Evergreen's UI code is privileged code.** It runs in the parent process
+   with chrome privileges, so a bug in it can bypass the content sandbox. It
+   is held to the rules in [§6.2](#62-rules-for-privileged-code).
+4. **The user can always see the real origin.** Evergreen may hide or collapse
    chrome, but the current site's origin, connection security and permission
    indicators must stay reachable, and permission prompts must always have a
    visible anchor.
 5. **Secure by default, user in control.** Defaults are hardened, but users
    can change them in Settings. We don't silently lock settings, and we tell
-   users when they've moved away from Pine's defaults.
-6. **Pine doesn't run services that see browsing.** The only server Pine runs
-   is the update and download endpoint. It receives as little information as
-   the updater needs ([§9.4](#94-updates)).
+   users when they've moved away from Evergreen's defaults.
+6. **Client-side only.** A browser should not need a server. Evergreen runs
+   no services: builds happen on a developer's own machine, releases and
+   update manifests are static files attached to GitHub releases, and every
+   Evergreen feature (Spaces, the archive, search defaults) lives in the
+   profile. The only network services Evergreen talks to are the ones Firefox
+   needs for security (certificate revocation, Safe Browsing lists, add-on
+   updates) and the sites the user visits.
 
 ---
 
@@ -151,19 +156,19 @@ the one listed first wins.
 ### Assets
 
 The user's browsing data (history, cookies, sessions, saved passwords, form
-data); signed-in accounts on the web; the integrity of the Pine binary and its
-updates; the user's identity across sites.
+data); signed-in accounts on the web; the integrity of the Evergreen binary
+and its updates; the user's identity across sites.
 
 ### Adversaries and mitigations
 
-| Adversary | Capabilities | Pine's mitigations |
+| Adversary | Capabilities | Evergreen's mitigations |
 |---|---|---|
-| **Malicious website** | Runs arbitrary JS/Wasm, attempts engine exploits, phishing and UI spoofing, fingerprinting | Firefox's sandbox and Fission unchanged; fast patching (G2); HTTPS-Only; Safe Browsing; fingerprinting protection; Pine UI never renders web-supplied strings as markup; origin always reachable (principle 4) |
-| **Network attacker** (hostile Wi-Fi, ISP, on-path) | Observes and tampers with traffic | HTTPS-Only Mode; DNS over HTTPS; HSTS preload; CRLite revocation; all Pine endpoints HTTPS with signed payloads |
+| **Malicious website** | Runs arbitrary JS/Wasm, attempts engine exploits, phishing and UI spoofing, fingerprinting | Firefox's sandbox and Fission unchanged; fast patching (G2); HTTPS-Only; Safe Browsing; fingerprinting protection; Evergreen UI never renders web-supplied strings as markup; origin always reachable (principle 4) |
+| **Network attacker** (hostile Wi-Fi, ISP, on-path) | Observes and tampers with traffic | HTTPS-Only Mode; DNS over HTTPS; HSTS preload; CRLite revocation; release files signed |
 | **Trackers / ad tech** | Third-party scripts, cross-site cookies, bounce tracking, referrers | ETP Strict; bundled uBlock Origin; cross-origin referrer trimming; Global Privacy Control; per-Space containers |
-| **Malicious or compromised extension** | WebExtension APIs within granted permissions | Signature enforcement compiled in; AMO only; Pine adds no privileged extension APIs |
-| **Supply chain** | Tampered Firefox source, compromised CI, stolen signing keys, hijacked update channel | Upstream source verified against a pinned Mozilla release key; signing isolated from builds; MAR-signed updates; two-person review for patches; reproducible-build goal ([§9](#9-release-engineering)) |
-| **Pine itself** (our servers, our team) | Whatever our infrastructure receives | No browsing data reaches Pine; minimal update requests; open source |
+| **Malicious or compromised extension** | WebExtension APIs within granted permissions | Signature enforcement compiled in; AMO only; Evergreen adds no privileged extension APIs |
+| **Supply chain** | Tampered Firefox source, compromised build machine, stolen signing keys, hijacked update files | Upstream source verified against a pinned Mozilla key **and** signing subkey; signing separated from building; MAR-signed updates; two-person review for patches; reproducible-build goal ([§9](#9-release-engineering)) |
+| **Evergreen itself** | — | No servers, so no Evergreen-held data; open source |
 
 ### Out of scope
 
@@ -174,338 +179,300 @@ updates; the user's identity across sites.
 
 ---
 
-## 5. Architecture: how Pine modifies Firefox
+## 5. Architecture: how Evergreen modifies Firefox
 
 ### 5.1 Repository layout
 
-The Pine repository **never contains Firefox source**. It contains a pin to a
-Firefox release and everything needed to turn that release into Pine.
+The repository **never contains Firefox source**. It contains a pin to a
+Firefox release and everything needed to turn that release into Evergreen.
 
 ```
-pine/
-├── upstream.json          # pinned Firefox version + expected tarball SHA-512
-├── keys/                  # pinned Mozilla release-signing key fingerprint
-├── scripts/               # fetch / verify / patch / overlay / build / package
-├── mozconfigs/            # per-platform build configuration
-├── patches/
-│   ├── series             # ordered list of patches
-│   └── *.patch            # each with a rationale header (§5.3)
-├── src/                   # files copied into the Firefox tree ("overlay")
-│   └── browser/components/pine/   # all Pine UI code (§6)
-├── branding/pine/         # icons, names, about dialog
-├── prefs/pine.js          # Pine default preferences (§8.2)
-├── distribution/          # bundled extensions (uBlock Origin)
-├── tests/                 # prefs audit, network egress test, packaging checks
-├── ci/ and .github/       # pipelines
-└── docs/
+eg.py                      # the build tool: python eg.py --help
+upstream.json              # pinned Firefox version, tarball SHA-512, Mozilla release key + subkey
+tools/eg/                  # eg.py's implementation (fetch, verify, prepare, mach, dev harness, checks)
+mozconfigs/                # common + windows / linux / macos build configuration
+patches/                   # series + *.patch, each with a rationale header (§5.3)
+src/                       # new files copied into the Firefox tree ("overlay")
+  browser/components/evergreen/   # all Evergreen UI and startup code (§6)
+  browser/locales/en-US/browser/evergreen.ftl
+branding/evergreen/        # names, icons, installer text (on top of Firefox's unofficial branding)
+prefs/evergreen.js         # Evergreen default preferences (§8.2)
+distribution/              # extensions bundled at packaging time (uBlock Origin)
+dev/                       # dev harness: run src/ on a stock Firefox without building
+tests/                     # unit/ (Node), python/ (tooling), smoke/ (Marionette, real Firefox)
+.github/workflows/ci.yml   # fast checks + smoke test; no builds, no servers
 ```
 
 ### 5.2 Ways of changing Firefox, cheapest first
 
-Every change uses the cheapest option that works. Each step down this list
-costs more on every rebase:
-
 | Rung | Mechanism | Rebase cost | Examples |
 |---|---|---|---|
-| 1 | **Build configuration** (`mozconfig`) | ~none | branding, app name, update channel, crash reporter off |
-| 2 | **Default prefs** (`prefs/pine.js`, pulled into `browser/app/profile/firefox.js` via its preprocessor) | very low | hardening, telemetry off, enabling vertical tabs |
-| 3 | **New files** (overlay into `src/`) | low; breaks only if an API we call changes | Pine UI modules, CSS, Fluent strings, tests |
-| 4 | **Patches to upstream files** | high; can conflict every release | hook points in `browser.xhtml`, tabbrowser, sidebar, urlbar |
+| 1 | **Build configuration** (`mozconfigs/`) | ~none | branding, app name, update channel, crash reporter off |
+| 2 | **Default prefs** (`prefs/evergreen.js`, shipped as `defaults/preferences/evergreen.js`; Firefox reads that directory in reverse alphabetical order, so it loads after `firefox.js` and wins) | very low | hardening, telemetry off, vertical tabs on |
+| 3 | **New files** (`src/` overlay) | low; breaks only if an API we call changes | Evergreen UI modules, CSS, Fluent strings, tests |
+| 4 | **Patches to upstream files** | high; can conflict every release | hook points that new files cannot provide |
+
+`eg.py prepare` enforces the ladder: the overlay refuses to replace any file
+that exists upstream, so the only way to change an upstream file is a
+documented patch.
 
 ### 5.3 Patch rules and budget
 
 - **One concern per patch.** Each patch starts with a header:
 
   ```
-  Pine-Patch: sidebar-space-hooks
-  Why: Adds an event hook so Pine can filter tabs by Space before render.
-  Upstream: bug NNNNNNN (filed) | not upstreamable (Pine-specific UI)
-  Drop-when: upstream lands an equivalent hook
-  Owner: <name>
+  Evergreen-Patch: register-evergreen-component
+  Why: Builds browser/components/evergreen ...
+  Upstream: not upstreamable (Evergreen-specific)
+  Drop-when: never; this is Evergreen's entry point
+  Owner: Evergreen maintainers
   ```
 
-- **Prefer hook patches.** A patch should add a small extension point that
-  Pine's overlay code uses, not carry Pine logic itself.
-- **Security-sensitive paths need extra review.** A patch touching `security/`,
-  `netwerk/`, `dom/`, `js/`, `ipc/`, sandbox code or the updater needs two
-  reviewers and a written justification.
-- **Upstream what we can.** If a hook is useful beyond Pine, file it upstream
-  and record the bug number in the header.
-- **Initial budget: ≤ 30 patches and ≤ 2,000 changed upstream lines at v1.0.**
-  CI reports the current count on every build. Going over the budget is a
-  conscious decision recorded in the PR.
+- **Prefer hook patches.** A patch adds a small extension point that
+  Evergreen's overlay code uses; it does not carry Evergreen logic itself.
+- **Security-sensitive paths need extra review.** `eg.py lint` rejects a patch
+  touching `security/`, `netwerk/`, `dom/`, `js/`, `ipc/`, the updater or the
+  extensions framework unless it carries a `Security-Review:` header naming
+  the second reviewer.
+- **Upstream what we can.** If a hook is useful beyond Evergreen, file it
+  upstream and record the bug number.
+- **Budget: ≤ 30 patches and ≤ 2,000 changed upstream lines at v1.0.**
+  `eg.py status` and `eg.py lint` report it. **Current: 1 patch, 1 line.**
 
 ### 5.4 Tracking upstream
 
-Pine follows the Firefox **Release** channel: a major release about every four
-weeks, plus dot releases in between.
+Evergreen follows the Firefox **Release** channel.
 
-- **Watch for releases.** A scheduled job polls Mozilla's product-details
-  version feed. When a new Release version appears, it opens a version-bump PR
-  that updates `upstream.json` and starts the full pipeline.
-- **Rebase early against Beta.** A nightly job applies the patch series to the
-  current **Firefox Beta** and builds it. Conflicts show up four to eight weeks
-  before they matter, so release day is normally just a version bump.
-- **Dot releases** (security "chemspills") take the same pipeline. Since our
-  patches already apply to the major version, these should need no manual work.
-- **Measure G2.** The time from Mozilla's release to Pine's is recorded for
-  every release and reviewed monthly.
+- **Version bumps.** Update `upstream.json`, then `eg.py check-patches` and
+  `eg.py check-prefs` show within seconds whether the patches still apply and
+  every pref still exists (they fetch only the needed files from Mozilla's
+  GitHub mirror). `eg.py fetch --pin` then verifies the signed tarball and
+  pins its hash.
+- **Rebase early against Beta.** `eg.py check-patches --ref <beta tag>`
+  catches conflicts weeks before release day.
+- **Dot releases** take the same path and normally need no manual work.
+- **Measure G2.** Record the time from Mozilla's release to Evergreen's for
+  every release.
 
 ---
 
-## 6. The Pine UI layer
+## 6. The Evergreen UI layer
 
-### 6.1 Where the code lives
+### 6.1 Where the code lives and how it loads
 
-All Pine UI code is new files under `browser/components/pine/` in the Firefox
-tree, overlaid from `src/`:
+All Evergreen UI code is new files under `browser/components/evergreen/`:
 
-- system ES modules (`*.sys.mjs`) for state: Spaces, archive, routing rules;
-- custom elements (`*.mjs`) and CSS for the sidebar, Space switcher, command
-  bar and Peek;
-- Fluent (`.ftl`) strings for localisation;
-- tests (`browser.toml` mochitests and xpcshell tests).
+| File | Role |
+|---|---|
+| `Spaces.sys.mjs`, `Archive.sys.mjs`, `SearchDefaults.sys.mjs` | Pure logic with no Firefox dependencies, unit-tested in Node |
+| `SpacesStore.sys.mjs`, `ArchiveStore.sys.mjs` | Persistence in the profile (`evergreen/spaces.json`, `evergreen/archive.jsonlz4`) |
+| `EvergreenWindow.sys.mjs` | Per-window UI: sidebar header, Space switcher, editor, Archive panel, tab menu, shortcuts |
+| `EvergreenStartup.sys.mjs` | App-wide: first-run defaults, archive timer, history-clearing hooks |
+| `evergreen.css`, `Evergreen.manifest`, `moz.build` | Styles, category registrations, build integration |
 
-Files are registered through `jar.mn` / `moz.build`. Patches to upstream files
-only add hook points (see [§5.3](#53-patch-rules-and-budget)).
+Modules are `MOZ_SRC_FILES` (served at `moz-src:///browser/components/evergreen/`)
+and import each other by relative URL. `Evergreen.manifest` registers them
+with Firefox's category manager (`browser-first-window-ready`,
+`browser-window-delayed-startup`, `browser-window-unload`,
+`browser-quit-application-granted`), which is how Firefox's own components
+hook into windows. As a result the **only upstream change needed to load
+Evergreen is one line** listing the directory in
+`browser/components/moz.build`.
+
+Evergreen avoids importing Firefox modules by URL where it can, because those
+URLs move between releases. Instead it uses the globals every browser window
+already has (`gBrowser`, `SessionStore`, `ContextualIdentityService`,
+`PrivateBrowsingUtils`) and `Services`.
 
 ### 6.2 Rules for privileged code
 
-Pine's UI runs with the system principal in the parent process. A bug there
-can do more damage than a bug in web content, so:
-
-1. **Never parse markup from the web.** Page titles, URLs, favicons and
-   search suggestions are written with `textContent`, DOM APIs or Fluent
-   arguments, never `innerHTML` or similar. This is enforced with Mozilla's
-   ESLint config, including `no-unsanitized`.
-2. **No remote code.** No scripts, stylesheets or configuration are fetched
-   from the network. (Firefox already blocks `eval` in the parent process; we
-   keep that.)
-3. **Favicons come from Firefox's favicon service.** Pine never fetches icons
-   itself.
-4. **Treat the content process as compromised.** Pine avoids new
-   `JSWindowActor`s that accept messages from content. Any it does add
-   validate every message and are security-reviewed.
-5. **State stays local.** Persistent data lives in the profile directory and is
-   written atomically (`IOUtils`). Nothing is uploaded.
-6. **Respect private windows.** Pine features check
-   `PrivateBrowsingUtils.isWindowPrivate` and never persist anything from
-   private windows.
+1. **Never parse markup from the web.** Titles, URLs, favicons and
+   suggestions are written with `textContent`, attributes or Fluent
+   arguments. Enforced by ESLint with `no-unsanitized`.
+2. **No remote code**, no `eval` (Firefox already blocks `eval` in the parent
+   process).
+3. **Favicons come from Firefox's favicon service** (`page-icon:` URLs).
+4. **Treat the content process as compromised.** No new `JSWindowActor`s
+   without security review; validate every message if one is added.
+5. **State stays local**, written atomically with `IOUtils`.
+6. **Private windows get no Spaces and persist nothing.**
+7. **Re-validate stored data.** Files in the profile can be edited by other
+   software, so stored Spaces and archive entries are re-checked on load (for
+   example, only `http(s)` archive entries are ever reopened).
 
 ### 6.3 Window layout
 
 ```
 +------------------+--------------------------------------------------+
-| o o o   <  >  C  |                                                  |
-| [ github.com   ] |                                                  |
-| +--+--+--+--+    |                                                  |
-| |F |F |F |F |    |   Web content: a normal Firefox tab, inset with  |
-| +--+--+--+--+    |   rounded corners so the edge of chrome is clear |
-| Work         v   |                                                  |
-| > Pinned         |                                                  |
-|   > Folder       |                                                  |
-| ---- Today ----- |                                                  |
-| + New Tab        |                                                  |
+| o Personal   ... |  <  >  C  [ https://example.org             ]    |
+| +--+--+--+--+    |--------------------------------------------------|
+| |F |F |F |F |    |                                                  |
+| +--+--+--+--+    |   Web content: a normal Firefox tab, inset in a  |
+|   tab (kept)     |   rounded frame so the edge of browser chrome is |
+|   tab            |   always clear                                   |
 |   tab            |                                                  |
-|   tab | tab      |   (split pair shown as one row)                  |
+| + New Tab        |                                                  |
 |                  |                                                  |
-| v  [] . o .   +  |                                                  |
+| [] . o .     +   |                                                  |
 +------------------+--------------------------------------------------+
-  F = Favorite   o = current Space in switcher   v = downloads   [] = archive
+  F = Favorite (pinned tab)   o = current Space   [] = Archive   + = new Space
 ```
 
-The horizontal tab strip and top toolbar are hidden. Navigation buttons and a
-compact address field move into the sidebar. When the sidebar is collapsed it
-slides out on hover at the window edge.
+The prototype keeps Firefox's navigation toolbar at the top, which satisfies
+principle 4 directly. Moving navigation into the sidebar (as Arc does) is
+planned as a later step and must keep the identity and permission
+indicators.
+
+### 6.4 Dev harness
+
+A Firefox build takes hours, so UI work uses `eg.py dev`: it copies an
+installed Firefox into `.eg/dev/` (the user's own install is never touched),
+adds an autoconfig file that applies `prefs/evergreen.js` and loads
+`src/browser/components/evergreen/` straight from the repository, and starts
+the copy with its own profile. Edit, restart, see the change. The same files
+are compiled into real builds unchanged.
+
+The harness uses Firefox's administrator configuration mechanism with its
+sandbox turned off, which runs with full privileges. It is a development
+tool only and is never part of a build.
 
 ---
 
 ## 7. Features
 
-### 7.0 Arc → Pine mapping
+### 7.0 Arc → Evergreen mapping
 
-| Arc | Pine | Built on |
-|---|---|---|
-| Sidebar with vertical tabs | Pine sidebar | Firefox sidebar + vertical tabs, restyled and extended |
-| Spaces | Spaces | Tab hiding + SessionStore metadata |
-| Profiles (per Space) | Space sign-in identity | Firefox containers |
-| Favorites | Favorites | Pinned tabs tagged by container |
-| Pinned tabs and folders | Space pins and folders | Pinned tabs + native tab groups |
-| Today tabs + auto-archive | Today + Archive | New (Pine) |
-| Split View (up to 4) | Split view (2 panes in v1) | Native split view (149+) |
-| Command Bar | Command bar | Firefox address bar providers |
-| Peek | Peek | Normal tab shown in an overlay |
-| Little Arc | Little Pine | Compact window for external links |
-| Air Traffic Control | Link routing | New (Pine) |
-| Boosts | Deferred; CSS-only if ever | — |
-| Easels, Notes, Library, Arc Max (AI) | Not planned | — |
+| Arc | Evergreen | Built on | Status |
+|---|---|---|---|
+| Sidebar with vertical tabs | Evergreen sidebar | Firefox sidebar + vertical tabs | **Prototype** |
+| Spaces | Spaces | Tab hiding + SessionStore values | **Prototype** |
+| Profiles (per Space) | Space sign-in identity | Firefox containers | **Prototype** |
+| Favorites | Favorites | Firefox pinned tabs | **Prototype** (uses Firefox's pinned-tab grid) |
+| Pinned tabs and folders | "Keep in Space" now; folders later | Tab values; native tab groups | **Prototype** (keep) / planned |
+| Today tabs + auto-archive | Archive | New (Evergreen) | **Prototype** |
+| Split View (up to 4) | Split view (2 panes) | Native split view (149+) | Planned |
+| Command Bar | Command bar | Firefox address bar providers | Planned |
+| Peek | Peek | Normal tab shown in an overlay | Planned |
+| Little Arc | Mini window | Compact window for external links | Planned |
+| Air Traffic Control | Link routing | New (Evergreen) | Planned |
+| Boosts | Deferred; CSS-only if ever | — | — |
+| Easels, Notes, Library, Arc Max (AI) | Not planned | — | — |
 
 ### 7.1 Sidebar
 
-Built **on** Firefox's vertical-tabs sidebar, not as a replacement. Firefox's
-own tab strip already handles drag and drop, multi-select, tab groups,
-accessibility and extension integration. Re-implementing it would be Pine's
-largest ongoing rebase burden.
+Built **on** Firefox's vertical-tabs sidebar, not as a replacement: Firefox's
+tab strip already handles drag and drop, multi-select, tab groups,
+accessibility and extensions. Evergreen adds the Space header (name, colour,
+menu) above it and the Space switcher (archive, Space dots, new Space) below
+it, tints the window with the Space's colour, and expands the sidebar on
+first run (Firefox starts it collapsed; afterwards Firefox remembers the
+user's choice). In the collapsed sidebar the switcher stacks vertically.
 
-Pine adds:
-
-- the Favorites grid;
-- the Space header and switcher;
-- the Pinned / Today split;
-- an address field and navigation buttons;
-- collapse and hover-reveal;
-- per-Space theme colours, applied through CSS custom properties. These
-  respect light/dark mode and high-contrast (`forced-colors`) mode.
-
-**Origin and permission visibility (principle 4).** In Firefox, the site
-identity box and the permission icons in the address bar are where permission
-prompts (camera, microphone, location and so on) anchor. Pine's sidebar
-address field keeps those elements. When the sidebar is collapsed:
-
-- a permission prompt reveals the sidebar, or anchors to a fallback inside
-  the window frame;
-- hovering or focusing the top edge shows the full origin and connection
-  security;
-- web content is always inset inside a chrome-drawn frame, so anything that
-  looks like browser UI *inside* the frame is visibly part of the page.
+**Origin and permission visibility (principle 4).** Web content is inset in
+a chrome-drawn frame, so anything that looks like browser UI inside the frame
+is visibly part of the page. While the navigation toolbar stays at the top,
+the identity box and permission prompts work exactly as in Firefox.
 
 ### 7.2 Spaces
 
-A **Space** is a named, coloured set of tabs (pinned and Today) with an icon.
-Users switch Spaces with the switcher, a keyboard shortcut, or a horizontal
-swipe.
+A **Space** is a named, coloured set of tabs. Users switch Spaces with the
+dots, `Ctrl+Shift+1…9`, or by selecting a tab that belongs to another Space
+(for example from the address bar's "Switch to tab").
 
 **Data model**
 
-- Space metadata (id, name, icon, colour, sign-in identity, sort order) is
-  stored in `pine/spaces.json` in the profile.
-- Each tab records its Space with `SessionStore.setCustomTabValue(tab,
-  "pine-space", id)`, so membership survives restarts and crash recovery with
-  the rest of the session.
-- Switching Space hides the previous Space's tabs and shows the new one's
-  (`gBrowser.hideTab` / `showTab`). Hidden tabs are skipped by Ctrl+Tab and
-  the Ctrl+1…8 shortcuts, which is what we want.
-- Tabs in other Spaces that haven't been used for a while are unloaded
-  (`gBrowser.discardBrowser`) to save memory, in addition to Firefox's own
-  low-memory tab unloading.
+- Space metadata (id, name, colour, sign-in identity) is in
+  `evergreen/spaces.json` in the profile. An empty name shows the localized
+  default ("Personal").
+- Each tab records its Space with `SessionStore.setCustomTabValue`, so
+  membership survives restarts and crash recovery. Each window records its
+  active Space the same way.
+- Switching hides the other Spaces' tabs with `gBrowser.hideTab`, which also
+  takes them out of `Ctrl+Tab` and `Ctrl+1…8`. If an extension reveals one of
+  them, Evergreen hides it again.
+- **Pinned tabs are Favorites, shared by every Space.** Firefox cannot hide
+  pinned tabs, and Arc's Favorites are shared too.
 
 **Sign-in identities (security model)**
 
-Arc ties Spaces to browser profiles. Pine ties them to Firefox **containers**.
+- When a user creates a Space, they choose whether it has **separate
+  sign-ins**. If so, Evergreen creates a Firefox container for it.
+- Containers isolate cookies, local storage, IndexedDB, cache and other site
+  data, so being signed in to a site in one Space does not sign you in to it
+  in another, and trackers cannot link activity across those Spaces through
+  stored state. This is stronger than Arc's default and comes from the engine.
+- History, bookmarks, extensions and settings are **shared**; the editor says
+  so plainly.
+- New tabs (`Ctrl+T`, the + button, bookmarks opened in a new tab) open in
+  the active Space's container. In the prototype this wraps the window's
+  `openTrustedLinkIn`; a real build will turn it into a small hook patch.
+  Links opened from a page inherit that page's container, as in Firefox.
+- A container is fixed when a tab is created, so **moving** a tab to a Space
+  with different sign-ins reopens the page there.
+- **Deleting** a Space archives its tabs. If it had separate sign-ins, its
+  container and that container's cookies and site data are deleted; the
+  confirmation says so.
 
-- When a user creates a Space, they choose **"Share sign-ins with ⟨Space⟩"**
-  or **"Separate sign-ins"**. Choosing separate sign-ins creates a new
-  container.
-- Containers isolate cookies, local storage, IndexedDB, cache and other
-  site data. Being signed in to a site in one Space doesn't sign you in to it
-  in another, and trackers can't link activity across Spaces through stored
-  state. This is stronger than Arc's default and comes from the engine rather
-  than Pine code.
-- History, bookmarks, extensions and settings are **shared** across containers.
-  The UI must say this plainly and not claim profile-level isolation.
-- The default Space uses the default identity (`userContextId` 0) for maximum
-  extension and site compatibility.
-- A container is fixed when a tab is created. Moving a tab to a Space with a
-  different identity **reopens** it in the destination container. The UI
-  warns that the user may need to sign in again.
+**Known limitations**
 
-**Risks**
+- Links that arrive from other apps open in the active Space but in the
+  default container. Routing them properly is part of the mini window and
+  link-routing work (§7.7, §7.8).
+- Extensions that also hide tabs (other tab-grouping extensions) can conflict
+  with Spaces.
 
-- Extensions that use the WebExtension tab-hiding API (for example other
-  tab-grouping extensions) can conflict with Spaces. Pine tags the tabs it
-  hides and re-applies Space visibility on `TabShow` events. The
-  compatibility notes will list known conflicting extensions.
-- A future "isolated profile" Space (a separate Firefox profile in its own
-  window) is possible but is not in v1.
+### 7.3 Favorites, kept tabs and the Archive
 
-### 7.3 Favorites, pinned tabs, Today and Archive
-
-- **Favorites** are pinned tabs marked as favorites and drawn as an icon grid.
-  They belong to a *sign-in identity*, so they appear in every Space that
-  uses that identity. This matches Arc, where Favorites belong to a profile.
-- **Pinned** tabs belong to one Space. They can be arranged in **folders**,
-  which are Firefox's native tab groups, so session restore and extensions
-  already understand them. "Reset to pinned URL" restores a pinned tab's
-  original address.
-- **Today** holds a Space's unpinned tabs. A tab not accessed for a set time
-  (default **12 h**; options 24 h, 7 days, 30 days, never; based on
-  `tab.lastAccessed`) is closed and moved to the **Archive**.
-- **Archive** stores URL, title, Space and time closed in a compressed JSON
-  file in the profile. It is limited in size and age (default 30 days), and
-  users can search it from the command bar.
-  - The archive is browsing history. It must be wiped by *every*
-    history-clearing path: Clear Recent History, clear-on-shutdown and
-    "Forget About This Site". Pine listens for Firefox's purge notifications
-    (e.g. `browser:purge-session-history`) and has tests for each path.
-  - Nothing is archived from private windows.
+- **Favorites** are Firefox's pinned tabs, shown as the icon grid at the top
+  of the vertical tab strip.
+- **Kept tabs** ("Keep in Space" in the tab menu) are never archived and are
+  marked in the tab list. Per-Space folders on native tab groups come later.
+- **Auto-archive.** A tab that has not been used for
+  `evergreen.archive.afterHours` (default **12**; 0 turns it off) is closed and
+  added to the **Archive**. Pinned, kept, selected, audible and screen-sharing
+  tabs are never archived. The first check runs ten minutes after startup, so
+  session restore finishes and the user sees their tabs first.
+- **The Archive** stores URL, title, Space and time, compressed, limited to
+  500 entries and 30 days. The Archive panel reopens an entry in its Space.
+  Only `http(s)` pages are recorded; blank tabs just close.
+- **The Archive is browsing history** and is wiped by Clear Recent History,
+  clear-on-shutdown and "Forget About This Site"
+  (`browser:purge-session-history` and `...-for-domain`). Nothing is archived
+  from private windows.
 
 ### 7.4 Split view
 
-Pine uses **Firefox's native split view** (149+) unchanged, so it behaves like
-Firefox. Pine shows a split pair as a single row in the sidebar (as Arc does)
-and adds keyboard shortcuts. Arc supports up to four panes. Supporting more
-than two is deferred and should be built **upstream first** rather than as a
-Pine patch.
+Evergreen will use **Firefox's native split view** (149+) unchanged and show a
+split pair as one row in the sidebar. More than two panes should be built
+upstream first.
 
 ### 7.5 Command bar
 
-Ctrl/⌘+T opens a centred, floating instance of the **Firefox address bar**
-rather than a new search UI. It already handles search, history, bookmarks,
-switch-to-tab and quick actions, and it already renders web-supplied
-suggestions safely as text.
-
-Pine adds address-bar *providers* for:
-
-- switching Space;
-- moving a tab to a Space;
-- searching the archive;
-- Pine commands (toggle sidebar, new Space, copy URL and so on).
-
-Whether keystrokes are sent to a search provider for suggestions is an open
-question ([§12](#12-open-questions)).
+`Ctrl+T` will open a centred, floating instance of the **Firefox address bar**
+rather than a new search UI, with providers added for switching Space, moving
+a tab to a Space, searching the Archive and Evergreen commands.
 
 ### 7.6 Peek
 
-When the user clicks a link from a Favorite or pinned tab to a different site,
-the link opens in **Peek**: a floating panel over the current page. Esc closes
-it, and "Expand" promotes it to a regular tab in the Space.
+Links from a Favorite to another site will open in **Peek**, a floating panel
+that is a normal tab in the same Space and container (principle 2).
 
-The Peek page is a **normal tab** in the same Space and container (principle
-2), displayed in an overlay. It is hidden from the tab list until it is
-expanded. It gets the full address and identity UI, and permission prompts
-anchor to the Peek panel.
+### 7.7 Mini window (links from other apps)
 
-### 7.7 Little Pine (links from other apps)
-
-Links that arrive from other apps (Pine as the default browser) open in a
-compact **Little Pine** window. From there the user can promote the page to a
-Space with one click or dismiss it. External URLs go through Firefox's normal
-command-line handling, so no new entry points are added.
-
-**Security option:** "Open links from other apps in a temporary container."
-Each Little Pine window gets a fresh container that is deleted (with its data)
-when the window closes. This protects existing sessions from cross-site
-request forgery triggered by a link and from cross-app tracking. Whether it is
-on by default is an open question ([§12](#12-open-questions)).
+Links from other apps will open in a compact window that can be promoted to a
+Space. Option: "Open links from other apps in a temporary container",
+**off by default** (decision Q8).
 
 ### 7.8 Link routing
 
-Users can set rules mapping hosts to Spaces (Arc's "Air Traffic Control"),
-e.g. `*.atlassian.net → Work`.
-
-Rules apply only to **new top-level loads**: new tabs, Little Pine, and links
-opened from other Spaces. They never reroute navigation inside a tab. Rerouting
-mid-navigation would break OAuth and SSO redirect chains, and it would give a
-site a way to move itself into a different container. Rules are stored
-locally with Space metadata.
+Rules mapping hosts to Spaces will apply only to **new top-level loads**,
+never to navigation inside a tab (that would break OAuth/SSO redirects and let
+a site move itself between containers).
 
 ### 7.9 Deferred and not planned
 
-- **Boosts** (per-site custom styles/scripts): deferred. If built, they will be
-  **CSS only**, stored locally, never synced and never shareable. Arc's
-  CVE-2024-45489 came from exactly the combination we exclude: JavaScript plus
-  cloud sharing.
-- **Four-pane split view**: upstream-first, after v1.
+- **Boosts**: if built, **CSS only**, local, never synced or shared.
+- **Four-pane split view**: upstream-first.
 - **Easels, Notes, Library, AI features**: not planned.
 
 ---
@@ -514,93 +481,94 @@ locally with Space metadata.
 
 ### 8.1 Engine and build: keep upstream's protections
 
-Pine's builds **must keep** the protections in Mozilla's official builds.
-Shortcuts that third-party Firefox builds sometimes take are forbidden:
-
 | Must keep | Why |
 |---|---|
-| Fission (site isolation) and the content-process sandbox at upstream levels | The primary defence against engine exploits |
-| Wasm-sandboxed libraries (RLBox; build with a WASI sysroot, never `--without-wasm-sandboxed-libraries`) | Isolates font, spelling, media and XML libraries in-process |
-| Add-on signature enforcement compiled in (`MOZ_REQUIRE_SIGNING`) | Users can't be tricked into turning it off with a pref |
-| Upstream toolchains via `mach bootstrap`, with artifact hashes recorded | We already trust Mozilla's toolchain; this pins exactly what we used |
-| The same compiler hardening flags and allocator as upstream | No "faster" builds that drop hardening |
-| The standard Firefox user agent | A distinct UA makes Pine users *more* fingerprintable; Pine must look like Firefox to sites |
+| Fission and the content-process sandbox at upstream levels | The primary defence against engine exploits |
+| Wasm-sandboxed libraries (never `--without-wasm-sandboxed-libraries`) | Isolates font, spelling, media and XML libraries in-process |
+| Add-on signature enforcement compiled in (`MOZ_REQUIRE_SIGNING=1`) | Users can't be talked into turning it off |
+| Upstream toolchains via `mach bootstrap` | We already trust Mozilla's toolchain |
+| The same compiler hardening and allocator as upstream | No "faster" builds that drop hardening |
+| The standard Firefox user agent | A distinct UA makes Evergreen users *more* fingerprintable |
 
-Build changes: Pine branding (`--with-branding`, app name), our update
-channel and update URL, our MAR verification keys, and the crash reporter
-disabled. Telemetry reporting is not compiled in, and the data-reporting
-prefs are also off as a second layer.
+`mozconfigs/common.mozconfig` states these rules, and the tooling tests fail
+if a mozconfig option disables the sandbox, signing or wasm sandboxing.
+Evergreen builds use their own branding, app name (`evergreen.exe`), vendor
+and profile location (never sharing a profile with Firefox); the crash
+reporter is disabled; telemetry reporting is not compiled in (we never set
+`MOZILLA_OFFICIAL`); and the Windows default-browser agent, which reports to
+Mozilla, is not built.
 
 ### 8.2 Default preferences
 
-The full list lives in `prefs/pine.js` and will come from a line-by-line
-review of arkenfox and LibreWolf (milestone M0). Representative defaults:
+`prefs/evergreen.js` holds 60 defaults. `eg.py check-prefs` verifies every one
+exists in the pinned Firefox, so typos and removed prefs are caught.
+Highlights:
 
-| Area | Pref (representative) | Pine default | Rationale |
-|---|---|---|---|
-| Transport | `dom.security.https_only_mode` | `true` | Upgrade all loads; warn before HTTP |
-| Transport | `security.tls.enable_0rtt_data` | `false` | Avoid TLS early-data replay |
-| DNS | `network.trr.mode` | *open question* | DoH resolver and fallback behaviour ([§12](#12-open-questions)) |
-| Tracking | `browser.contentblocking.category` | `"strict"` | ETP Strict, including fingerprinting protection |
-| Tracking | `privacy.globalprivacycontrol.enabled` | `true` | Send GPC |
-| Tracking | `network.http.referer.XOriginTrimmingPolicy` | `2` | Only the origin in cross-origin referrers |
-| WebRTC | `media.peerconnection.ice.default_address_only` | `true` | Limit local IP exposure |
-| Speculation | `network.prefetch-next`, `network.dns.disablePrefetch`, `browser.urlbar.speculativeConnect.enabled` | off | No connections the user didn't ask for |
-| Attack surface | `pdfjs.enableScripting` | `false` | Disable JavaScript in PDFs |
-| Downloads | `browser.safebrowsing.downloads.remote.enabled` | `false` | Keep local list checks; don't send download metadata to a remote service |
-| Passwords | `signon.autofillForms` | `false` | Fill only on user action, preventing silent credential harvesting by injected forms |
-| Fingerprinting | `privacy.resistFingerprinting` | `false` (opt-in "Strict" mode) | Breaks many sites; offered as a clearly labelled opt-in |
+| Area | Default | Rationale |
+|---|---|---|
+| Layout | vertical tabs, sidebar shown, containers enabled, session restore on | Arc-style sidebar; Spaces live in the session |
+| Transport | HTTPS-Only on; TLS 0-RTT off | Upgrade all loads; avoid early-data replay |
+| DNS | DoH via **Quad9**, fallback mode (`network.trr.mode` 2) | Encrypted DNS through a non-profit, no-IP-logging resolver; strict mode available |
+| Tracking | **ETP Strict** (set at first run), Global Privacy Control, cross-origin referrer trimming, WebRTC default address only | Firefox only applies a tracking-protection category when it is a user value, so Evergreen sets it once at first run unless the user has custom settings |
+| Speculation | prefetch, DNS prefetch, speculative connections off | No connections the user didn't ask for |
+| Attack surface | PDF scripting off; remote download checks off; logins fill only on request | Smaller surface; less data sent away |
+| Search | **Ecosia** default (first run); suggestions off until opted in; trending, Firefox Suggest and sponsored suggestions off | See §8.7 |
+| Fingerprinting | `privacy.resistFingerprinting` stays an opt-in | It breaks many sites |
 
-Users can change all of these. Settings shows a **"Pine defaults changed"**
-indicator listing anything the user has moved away from the hardened
-baseline, with a one-click reset (principle 5).
+Users can change all of these. A "defaults changed" indicator in Settings is
+planned (principle 5).
 
 **No `policies.json` by default.** Enterprise policies would let us lock
-settings, but they also show "managed by your organization" and use the file
-that real enterprise deployments need. Pine sets defaults instead. Locked
-policies remain available to organisations that deploy Pine.
+settings, but they also show "managed by your organization" and take the file
+that real enterprise deployments need.
 
 ### 8.3 Data collection and sponsored content removed
 
-- **Telemetry, studies and experiments**: not compiled in, and data reporting,
-  Normandy/Nimbus studies and recommendation feeds are disabled by pref.
-- **Sponsored content**: sponsored top sites, sponsored stories and sponsored
-  Firefox Suggest results are off.
-- **Add-on recommendations** in the add-ons manager are off.
-- **AI features**: Firefox 148's "Block AI enhancements" control is **on** by
-  default. Users can turn individual features back on; local translations
-  should be considered for re-enabling, since they run on-device.
-- **Crash reports**: crash reporter disabled at build time. If we add one
-  later, it must be opt-in for each crash.
+- **Telemetry, studies and experiments**: not compiled in; data reporting,
+  Normandy/Nimbus and recommendation feeds also off by pref.
+- **Sponsored content**: sponsored top sites, stories and Firefox Suggest
+  results off; weather and Pocket-style story feeds off.
+- **Add-on recommendations**: off.
+- **AI features**: Firefox's "Block AI enhancements" control set to blocked
+  (`browser.ai.control.default`), and the chatbot, link previews, smart tab
+  groups and smart window off. Users can re-enable individual features
+  (on-device translations are a good candidate).
+- **Crash reports**: crash reporter not built.
+- **Firefox onboarding**: off; Evergreen will ship its own.
 
 ### 8.4 Security services we keep on
 
 Removing data collection must not remove security features that depend on
-network updates. Pine **keeps**:
-
-- **Remote Settings** security collections: OneCRL, CRLite (certificate
-  revocation), intermediate certificate preloading, and the add-on blocklist;
-- **ETP / Shavar** tracker lists;
-- **Safe Browsing** phishing and malware protection using the local list
-  (only hashed URL prefixes are checked against Google). This needs a Google
-  API key ([§12](#12-open-questions));
-- **AMO** add-on update checks;
-- **HSTS preload** and the Mozilla root store as shipped.
+network updates. Evergreen **keeps** Remote Settings security lists (OneCRL,
+CRLite, intermediate preloading, the add-on blocklist), the ETP tracker
+lists, **Safe Browsing** with local lists (hashed prefixes only; remote
+download checks off), AMO add-on updates, HSTS preload and Mozilla's root
+store. These are Mozilla and Google services that Firefox itself uses; they
+are not Evergreen servers.
 
 ### 8.5 Extensions
 
-- **uBlock Origin** is bundled as a distribution add-on, so it is present
-  from first launch without a network fetch. It updates from AMO, and users
-  can remove it.
-- Only signed extensions from AMO install, the same as Firefox Release.
-- Pine adds **no** privileged extension APIs.
+- **uBlock Origin** is bundled as a distribution add-on (pinned by URL and
+  SHA-256 in `distribution/extensions.json`, copied in at packaging time),
+  updates from AMO, and can be removed.
+- Only AMO-signed extensions install.
+- Evergreen adds **no** privileged extension APIs.
 
 ### 8.6 Things we deliberately don't change
 
-- **User agent and other web-visible signals**: Pine must look like Firefox
-  to websites (see §8.1).
-- **The certificate root store**: Mozilla's, as shipped.
-- **Default content-process count, Fission and sandbox levels**: upstream's.
+The user agent, Mozilla's root store, and Fission, sandbox and process
+settings.
+
+### 8.7 Search
+
+At first run Evergreen makes **Ecosia** the default engine, on the device.
+Firefox ships Ecosia only for some locales and regions, and that copy
+carries Mozilla's partner code. Where it is missing, Evergreen adds its own
+Ecosia entry with no partner code. **Google** and **DuckDuckGo** stay in
+Firefox's built-in list, one click away in Settings › Search, and **custom
+engines** can be added from the same page. The default is applied once:
+choosing another engine later is never overridden. Search suggestions (which
+send keystrokes to the engine) start off and can be turned on in Settings.
 
 ---
 
@@ -610,122 +578,121 @@ network updates. Pine **keeps**:
 
 ```mermaid
 flowchart LR
-  A[New Firefox release<br/>detected] --> B[Fetch source tarball,<br/>SHA512SUMS, .asc]
-  B --> C{Signature valid for<br/>pinned Mozilla key<br/>and hash matches?}
-  C -- no --> X[Stop and alert]
-  C -- yes --> D[Apply patches/series]
-  D --> E[Overlay src/, branding,<br/>prefs, distribution]
-  E --> F[mach build + package<br/>per platform]
-  F --> G[Tests: Pine suites, upstream suites<br/>for patched areas, prefs audit,<br/>egress test]
-  G --> H[Isolated signing job]
-  H --> I[Publish release assets<br/>and update manifests]
+  A[Bump upstream.json] --> B[check-patches / check-prefs<br/>against Mozilla's mirror]
+  B --> C[fetch: tarball, SHA512SUMS, .asc, KEY]
+  C --> D{Signed by pinned<br/>key + subkey,<br/>hash matches?}
+  D -- no --> X[Stop]
+  D -- yes --> E[prepare: extract, patch,<br/>overlay, branding, prefs]
+  E --> F[mach build + package<br/>on the developer's PC]
+  F --> G[Tests: smoke test, prefs audit,<br/>egress test]
+  G --> H[Sign separately]
+  H --> I[GitHub release: installer,<br/>update files, checksums]
 ```
 
-- **Source verification.** The Firefox source tarball, `SHA512SUMS` and
-  `SHA512SUMS.asc` are downloaded from Mozilla's release archive. The
-  signature is checked against a Mozilla release-key fingerprint **pinned in
-  this repo**, never against a key fetched alongside the files.
-- **Build infrastructure.** A Firefox build needs tens of GB of disk and
-  hours of CPU. GitHub's standard hosted runners are too small, so full
-  builds need larger hosted runners or self-hosted builders, with `sccache`.
-  Cheap checks (patch-apply, lint, Pine unit tests) run on standard runners
-  for every PR. Firefox's build system supports cross-compiling macOS and
-  Windows builds from Linux, which keeps all builders on one hardened image.
-  Infrastructure choice is an open question.
-- **Release cadence.** Pine has its own channel layered on Firefox: e.g.
-  `pine 150.0.3-1` is Firefox 150.0.3 plus Pine build 1. A Pine-only fix
-  increments the suffix.
+- **Source verification.** `SHA512SUMS` must carry a valid signature from the
+  Mozilla primary key **and** one of the signing subkeys pinned in
+  `upstream.json`. Pinning the subkey matters: Mozilla rotated its signing
+  subkey in August 2026 after the previous one was exposed, so a signature
+  from the old subkey must be rejected even if a stale KEY file does not
+  carry the revocation. The tarball hash is then pinned in `upstream.json`
+  (`eg.py fetch --pin`), so machines without `gpg` verify against a hash that
+  was itself established by a signature check.
+- **Where builds run.** On the developer's own Windows PC, from the
+  MozillaBuild shell (`eg.py bootstrap`, `eg.py build`). CI runs only fast
+  checks and the smoke test; no build servers are needed (principle 6).
+- **Versions.** `evergreen 157.0-1` is Firefox 157.0 plus Evergreen build 1.
 
 ### 9.2 Signing and keys
 
 | Artifact | Signature |
 |---|---|
 | Windows installer and binaries | Authenticode (code-signing certificate) |
-| macOS app | Apple Developer ID, hardened runtime with Firefox's entitlements, notarized |
-| Linux tarball | Detached signature (minisign/GPG) and published SHA-256 |
-| Update packages | **MAR signature** with Pine's own key pair (public keys compiled into the updater; primary and secondary keys for rotation) |
+| Update packages | **MAR signature** with Evergreen's own key pair (public keys compiled into the updater) |
+| Release files | Published SHA-256 checksums and a detached signature |
 
-Keys live in an HSM or cloud KMS. Signing runs in a **separate job** that
-receives only the build outputs and their hashes, never the build
-environment. Releases also publish build provenance attestations.
+Keys are kept offline or in a hardware token, and signing is a separate step
+from building, on a machine that receives only the build outputs.
 
 ### 9.3 Distribution
 
 | Platform | Packages | Notes |
 |---|---|---|
-| Linux | Tarball (self-updating), Flatpak | Inside Flatpak, Firefox can't create the user namespaces its Linux sandbox uses for filesystem and network isolation (seccomp filtering still applies). The **tarball / native package is the reference security configuration**; Flatpak is for convenience. |
-| macOS | Signed, notarized DMG | Universal binary (arm64 + x86_64) |
-| Windows | Signed installer | x86_64 first; arm64 later |
+| **Windows** (first) | Signed installer | x86-64 first; arm64 later |
+| Linux | Tarball | The tarball is the reference security configuration; inside Flatpak, Firefox cannot use the user namespaces its Linux sandbox relies on |
+| macOS | Signed, notarized DMG | Later |
 
 ### 9.4 Updates
 
-- The Firefox updater with **Pine's MAR keys**. A tampered or downgraded
-  update is rejected even if the update server is compromised.
-- **Static update manifests** (generated `update.xml` per channel, platform
-  and version, on a CDN) rather than running Mozilla's Balrog service.
-- **Minimal update requests.** Firefox's default update URL template includes
-  OS version, locale and build details. Pine's template sends only what's
-  needed to choose a package (version, platform/architecture, channel). Server
-  logs are short-lived and contain no IP-linked analytics.
-- The updater is on by default. Unpatched browsers are the main real-world
-  risk.
+- Firefox's updater with **Evergreen's MAR keys**, so a tampered or
+  downgraded update is rejected even if the download location is compromised.
+- **Static update files on GitHub releases**, no update server.
+- The update request sends only what is needed to choose a package (version,
+  platform, channel).
+- Until the updater is set up (M3), Evergreen is updated by installing a new
+  release.
 
 ### 9.5 Reproducibility
 
-Goal for **v1.x**: bit-for-bit reproducible Linux builds, verified by a second
-independent builder before release. Windows and macOS are reproducible up to
-signing. Until we get there, we publish build provenance and toolchain
-hashes for every release.
+Goal for v1.x: reproducible builds, verified by a second independent
+builder. Until then, each release records the toolchain and source hashes.
 
 ---
 
 ## 10. Testing
 
-| Suite | What it checks | When |
+| Suite | What it checks | Command |
 |---|---|---|
-| Patch-apply | Patch series applies cleanly to the pinned Release and the current Beta | Every PR; nightly against Beta |
-| Lint | ESLint (Mozilla config, `no-unsanitized`), Stylelint, Fluent | Every PR |
-| Pine unit and integration tests | xpcshell for Spaces/archive/routing state; browser mochitests for sidebar, Spaces, Peek, Little Pine, command bar | Every build |
-| Upstream suites for patched areas | tabbrowser, sidebar, sessionstore, urlbar, contextual identity, split view | Every build |
-| **Prefs audit** | Starts the *packaged* build and asserts every Pine security default and build-time protection (§8.1–8.2) | Every build; blocks release |
-| **Network egress test** | Scripted first launch, idle and browsing session through a logging proxy. Fails if any host outside the allowlist is contacted (Remote Settings, Shavar, Safe Browsing, AMO, Pine updates, configured DoH resolver, visited sites) | Every release build; blocks release |
-| Privacy wipe tests | Every history-clearing path removes Pine's archive and Space history | Every build |
-| Update test | Previous release → new release through a signed MAR; tampered MAR rejected | Every release |
+| Lint | ESLint incl. `no-unsanitized` on all privileged code | `npm run lint` |
+| UI unit tests | Spaces model, archive policy, search defaults (24 tests) | `npm test` |
+| Tooling tests | Prefs parser, patch lint, real GPG verification with pinned keys, full prepare pipeline on a fake tarball, dev harness (20 tests) | `python -m unittest discover -s tests/python` |
+| Patch / pref checks | Patches apply and prefs exist in the pinned Firefox | `eg.py check-patches`, `eg.py check-prefs` |
+| **Smoke test** | Evergreen running in a real Firefox: prefs applied, first run (ETP Strict, Ecosia), Spaces and containers, Ctrl+T container, switching, keyboard shortcut, moving tabs across identities, auto-archive, Archive panel, history clearing, editor, restart persistence, deleting Spaces, private windows, no console errors (16 checks) | `python tests/smoke/smoke_test.py` |
+| Prefs audit *(M0)* | Starts the *packaged* build and checks every default and build protection | — |
+| Network egress test *(M0)* | Scripted session through a logging proxy; fails on any host outside the allowlist | — |
+| Update test *(M3)* | Old → new release through a signed MAR; tampered MAR rejected | — |
 
-Pine relies on Mozilla's fuzzing for the engine. Pine's parent-process code
-gets a security review before v1.0 and for every new IPC actor.
+CI runs lint, unit tests, tooling tests, patch and pref checks on every push,
+and the smoke test in the Firefox installed on GitHub's Windows and Linux
+runners.
 
 ---
 
 ## 11. Milestones
 
-| Milestone | Scope | Exit criteria |
+| Milestone | Scope | Status |
 |---|---|---|
-| **M0 Foundations** | Fetch/verify/patch/overlay/build pipeline; branding; `prefs/pine.js` from arkenfox/LibreWolf review; telemetry and sponsored content off; bundled uBO; Linux builds | Linux build passes prefs audit and egress test; Beta-tracking job is green |
-| **M1 Sidebar & Spaces** | Pine sidebar, Spaces with sign-in identities, Favorites, pinned + folders, Today + Archive, collapse with origin/permission handling | Daily-drivable on Linux; privacy wipe tests pass |
-| **M2 Multitasking** | Split view integration, command bar, Peek, Little Pine, link routing, keyboard shortcuts | Feature tests pass; UX review against §7 |
-| **M3 Ship** | macOS and Windows builds; signing, notarization, MAR updates, update server; security review; public beta | One full Firefox release cycle shipped within the G2 targets |
-| **Later** | CSS-only Boosts, 4-pane split (upstream-first), isolated-profile Spaces, sync | — |
+| **M0 Foundations** | Build tooling, source verification, branding, prefs, uBO bundling, CI; first real Windows build; prefs audit and egress test; arkenfox/LibreWolf prefs review | Tooling and CI done; **first real build pending** |
+| **M1 Sidebar & Spaces** | Sidebar, Spaces with sign-in identities, Favorites, kept tabs, Archive | **Prototype done** (dev harness, smoke-tested); next: folders, navigation in the sidebar, polish |
+| **M2 Multitasking** | Split view integration, command bar, Peek, mini window, link routing | Not started |
+| **M3 Ship** | Windows installer signing, MAR updates via GitHub releases, security review, public beta | Not started |
+| **Later** | Linux and macOS packages, CSS-only Boosts, 4-pane split (upstream-first), isolated-profile Spaces | — |
 
 ---
 
-## 12. Open questions
+## 12. Decisions
 
-Each question has a recommendation where we have one.
-
-| # | Question | Recommendation |
+| # | Question | Decision |
 |---|---|---|
-| Q1 | **Platform order** | Linux first (cheapest CI, reference sandbox), then macOS (Arc's main user base), then Windows |
-| Q2 | **Build infrastructure**: larger GitHub runners vs. self-hosted builders | Decide after measuring an M0 Linux build. Self-hosted is cheaper at volume but must be hardened as release infrastructure |
-| Q3 | **Default search engine** and whether search suggestions (sending keystrokes) are on by default | A privacy-respecting default engine; suggestions off with a first-run choice |
-| Q4 | **DNS over HTTPS**: resolver and mode (fallback vs. strict) | A no-logging resolver in fallback mode, user-selectable; strict mode available |
-| Q5 | **Safe Browsing API key.** Google's Safe Browsing API is for non-commercial use only; commercial use requires the paid Web Risk API | Fine while Pine is non-commercial; revisit if that changes |
-| Q6 | **Use of Mozilla services** (Remote Settings, Shavar, AMO, optionally Sync) by a third-party build | Other derivatives do this; confirm the terms before public release |
-| Q7 | **Sync**: Firefox Sync via Mozilla accounts, none, or self-hosted | Support Firefox Sync (end-to-end encrypted, no Pine server); Space metadata isn't synced in v1 |
-| Q8 | **Temporary container for links from other apps** on by default? | Off by default, prominent in onboarding; revisit after beta feedback |
-| Q9 | **Licence** for Pine's own files | MPL-2.0, matching Firefox (modified Firefox files must stay MPL-2.0 anyway) |
-| Q10 | **Name and trademark** | Check "Pine" for conflicts. Mozilla's trademark policy requires no Firefox branding in modified builds, which our branding step handles |
-| Q11 | **Strict fingerprinting mode** (`privacy.resistFingerprinting`) | Opt-in toggle with a clear explanation of site breakage |
+| — | Base | Thin patch layer on upstream Firefox (not a Zen fork, not an extension) |
+| — | Channel | Firefox Release |
+| Q1 | Platform order | **Windows first**; tooling, mozconfigs and CI stay cross-platform |
+| Q2 | Build infrastructure | **No servers.** Builds run on the developer's PC; CI does fast checks only; releases and update files are static GitHub release assets |
+| Q3 | Default search | **Ecosia**; Google and DuckDuckGo one click away; custom engines supported; suggestions off until opted in |
+| Q4 | DNS over HTTPS | Quad9, fallback mode; strict mode available |
+| Q5 | Safe Browsing key | Evergreen is a non-commercial personal project, so Google's free Safe Browsing API terms apply. Revisit if that changes (commercial use requires the paid Web Risk API) |
+| Q6 | Mozilla services (Remote Settings, tracker lists, AMO, Sync) | Use them, as other Firefox derivatives do; confirm the terms before a public release |
+| Q7 | Sync | Firefox Sync through Mozilla accounts (end-to-end encrypted); Spaces are not synced in v1 |
+| Q8 | Temporary container for links from other apps | Off by default, offered in onboarding |
+| Q9 | Licence | MPL-2.0 (`LICENSE`) |
+| Q10 | Name and trademark | Evergreen; no Mozilla trademarks (handled by the branding). Note that "Evergreen" is a common software term (Microsoft uses it for the auto-updating WebView2 runtime), so check for conflicts before a public launch |
+| Q11 | Strict fingerprinting resistance | Opt-in, with an explanation of site breakage |
+
+### Still open
+
+- The code-signing certificate for Windows (needed for M3).
+- Whether to ship a privileged Windows update service, or only user-level
+  updates.
+- Exact search-suggestion and onboarding flow.
 
 ---
 
@@ -734,11 +701,11 @@ Each question has a recommendation where we have one.
 - Firefox 136 release notes: sidebar and vertical tabs — <https://www.mozilla.org/firefox/136.0/releasenotes>
 - Firefox tab groups (138) — <https://heise.de/-10367703>
 - Firefox 149 split view — <https://www.gigazine.net/gsc_news/en/20260325-firefox-149/>
-- Firefox 149 beta: split view — <https://www.linuxtoday.com/blog/firefox-149-enters-beta-with-split-view-more-robust-http-3-upload-performance/>
 - Firefox 148 AI controls / "Block AI enhancements" — <https://www.techspot.com/news/111453-firefox-148-rolls-out-promised-ai-kill-switch.html>
+- Mozilla signing-key update, 2026-08-10 — <https://blog.mozilla.org/security/2026/08/10/updated-gpg-key-for-signing-firefox-and-thunderbird-releases/>
 - Arc maintenance-mode status and Zen comparison — <https://supasidebar.com/blog/zen-vs-arc>
 - Arc Boosts vulnerability CVE-2024-45489 — <https://security-tracker.debian.org/tracker/CVE-2024-45489>
-- Google Safe Browsing usage limits and terms — <https://developers.google.com/safe-browsing/v4/usage-limits>
+- Google Safe Browsing usage terms — <https://developers.google.com/safe-browsing/v4/usage-limits>
 - Zen Browser source — <https://github.com/zen-browser/desktop>
 - LibreWolf — <https://librewolf.net/>
 - arkenfox user.js — <https://github.com/arkenfox/user.js>
