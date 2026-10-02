@@ -6,7 +6,7 @@ a command bar, Peek and a mini window for links from other apps.
 
 Evergreen is a thin layer on upstream Firefox Release: build configuration,
 default prefs, Evergreen's own UI code and a small, documented set of patches
-(currently two, four lines in all). Keeping the diff small lets us ship each
+(currently three, six lines in all). Keeping the diff small lets us ship each
 Firefox security release quickly. Evergreen runs no servers; everything it adds
 lives on your device.
 

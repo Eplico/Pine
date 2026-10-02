@@ -237,8 +237,9 @@ documented patch.
 - **Upstream what we can.** If a hook is useful beyond Evergreen, file it
   upstream and record the bug number.
 - **Budget: ≤ 30 patches and ≤ 2,000 changed upstream lines at v1.0.**
-  `eg.py status` and `eg.py lint` report it. **Current: 2 patches, 4 lines**
-  (registering Evergreen's component; packaging the bundled extensions).
+  `eg.py status` and `eg.py lint` report it. **Current: 3 patches, 6 lines**
+  (registering Evergreen's component; packaging the bundled extensions;
+  building the installer from the branded self-extractor stub).
 
 ### 5.4 Tracking upstream
 
@@ -304,25 +305,42 @@ already has (`gBrowser`, `SessionStore`, `ContextualIdentityService`,
 ### 6.3 Window layout
 
 ```
-+------------------+--------------------------------------------------+
-| o Personal   ... |  <  >  C  [ https://example.org             ]    |
-| +--+--+--+--+    |--------------------------------------------------|
-| |F |F |F |F |    |                                                  |
-| +--+--+--+--+    |   Web content: a normal Firefox tab, inset in a  |
-|   tab (kept)     |   rounded frame so the edge of browser chrome is |
-|   tab            |   always clear                                   |
-|   tab            |                                                  |
-| + New Tab        |                                                  |
-|                  |                                                  |
-| [] . o .     +   |                                                  |
-+------------------+--------------------------------------------------+
++---------------------------------------------------------------------------+
+| (tree) [=] (v)   |  <  >  C  [ https://example.org                ]   (*) |
++------------------+--------------------------------------------------------+
+| o Personal   ... |                                                        |
+| +--+--+--+--+    |   Web content: a normal Firefox tab, inset in a        |
+| |F |F |F |F |    |   rounded frame so the edge of browser chrome is       |
+| +--+--+--+--+    |   always clear                                         |
+|   tab (kept)     |                                                        |
+|   tab            |                                                        |
+| + New Tab        |                                                        |
+|                  |                                                        |
+| [] . o .     +   |                                                        |
++------------------+--------------------------------------------------------+
+  (tree) = menu   [=] = hide/show sidebar   (v) = Downloads   (*) = extensions
   F = Favorite (pinned tab)   o = current Space   [] = Archive   + = new Space
 ```
 
-The prototype keeps Firefox's navigation toolbar at the top, which satisfies
-principle 4 directly. Moving navigation into the sidebar (as Arc does) is
-planned as a later step and must keep the identity and permission
-indicators.
+- **Toolbar.** The app menu (Firefox's ☰, drawn as an evergreen tree), the
+  sidebar button and Downloads sit above the sidebar. Back, Forward, Reload
+  and the address bar start at the page's left edge: they move right as the
+  sidebar widens and follow Downloads when it is hidden. Extensions are at
+  the right. The toolbar is about 20% thinner than Firefox's (26px buttons
+  and address bar instead of 32px). The order is set once per profile
+  through Firefox's toolbar customization, so users can still rearrange it.
+- **Hiding the sidebar.** The sidebar button (or `Ctrl+Alt+Z`) hides the
+  sidebar completely and the page takes the full width. Moving the mouse to
+  the left edge of the window slides the sidebar in *over* the page, which
+  does not resize, and it slides away when the mouse leaves. It stays while a
+  menu or panel opened from it is open, while something is dragged, or while
+  a Space is being renamed. The choice is remembered per window and for new
+  windows. Evergreen keeps Firefox's launcher expanded and moves it out of
+  the layout, so Firefox still runs the tabs, tools and resizing.
+
+The navigation toolbar stays at the top, which satisfies principle 4
+directly. Moving navigation into the sidebar (as Arc does) is planned as a
+later step and must keep the identity and permission indicators.
 
 ### 6.4 Dev harness
 
@@ -365,9 +383,10 @@ Built **on** Firefox's vertical-tabs sidebar, not as a replacement: Firefox's
 tab strip already handles drag and drop, multi-select, tab groups,
 accessibility and extensions. Evergreen adds the Space header (name, colour,
 menu) above it and the Space switcher (archive, Space dots, new Space) below
-it, tints the window with the Space's colour, and expands the sidebar on
-first run (Firefox starts it collapsed; afterwards Firefox remembers the
-user's choice). In the collapsed sidebar the switcher stacks vertically.
+it and tints the window with the Space's colour. The sidebar starts at two
+thirds of Firefox's default width and can be dragged wider. Clicking the
+Space's name renames it in place (Enter saves, Escape cancels). Hiding the
+sidebar and revealing it from the window edge are described in §6.3.
 
 **Origin and permission visibility (principle 4).** Web content is inset in
 a chrome-drawn frame, so anything that looks like browser UI inside the frame
@@ -478,6 +497,13 @@ a site move itself between containers).
 
 ---
 
+### 7.10 First run
+
+On first run, after the window is ready, Evergreen opens Firefox's import
+window if it finds another browser's bookmarks, passwords or history on the
+computer, so people can bring their data over. It is offered once per
+profile; everything is read locally.
+
 ## 8. Security and privacy hardening
 
 ### 8.1 Engine and build: keep upstream's protections
@@ -570,8 +596,15 @@ Firefox ships Ecosia only for some locales and regions, and that copy
 carries Mozilla's partner code. Where it is missing, Evergreen adds its own
 Ecosia entry with no partner code. **Google** and **DuckDuckGo** stay in
 Firefox's built-in list, one click away in Settings › Search, and **custom
-engines** can be added from the same page. The default is applied once:
-choosing another engine later is never overridden. Search suggestions (which
+engines** can be added from the same page.
+
+Firefox learns the region after first run, and in regions where it ships its
+own Ecosia it then drops Evergreen's same-named entry as a duplicate and
+falls back to its default engine. Evergreen remembers the engine it made the
+default and, when that engine is replaced by another Ecosia, makes the
+replacement the default. Once the user picks another engine, or removes
+Ecosia, Evergreen stops managing the default and never overrides the
+choice. Search suggestions (which
 send keystrokes to the engine) start off and can be turned on in Settings.
 
 ---
@@ -661,7 +694,7 @@ builder. Until then, each release records the toolchain and source hashes.
 | UI unit tests | Spaces model, archive policy, search defaults (24 tests) | `npm test` |
 | Tooling tests | Prefs parser, patch lint, real GPG verification with pinned keys, full prepare pipeline on a fake tarball, dev harness (21 tests) | `python -m unittest discover -s tests/python` |
 | Patch / pref checks | Patches apply and prefs exist in the pinned Firefox | `eg.py check-patches`, `eg.py check-prefs` |
-| **Smoke test** | Evergreen running in a real Firefox: prefs applied, first run (ETP Strict, Ecosia), Spaces and containers, Ctrl+T container, switching, keyboard shortcut, moving tabs across identities, auto-archive, Archive panel, history clearing, editor, restart persistence, deleting Spaces, private windows, no console errors (16 checks) | `python tests/smoke/smoke_test.py` |
+| **Smoke test** | Evergreen running in a real Firefox (CI: the pinned release on Linux, the runner's Firefox on Windows; the release workflow: the built `evergreen.exe`): prefs applied, first run (ETP Strict, Ecosia, the import offer), Spaces and containers, Ctrl+T container, switching, keyboard shortcut, moving tabs across identities, auto-archive, Archive panel, history clearing, editor, restart persistence (Spaces and the search default), deleting Spaces, private windows, toolbar order and alignment, toolbar and sidebar sizes against Firefox's own, hiding and revealing the sidebar, renaming a Space, no console errors (23 checks) | `python tests/smoke/smoke_test.py` |
 | Prefs audit *(M0)* | Starts the *packaged* build and checks every default and build protection | — |
 | Network egress test *(M0)* | Scripted session through a logging proxy; fails on any host outside the allowlist | — |
 | Update test *(M3)* | Old → new release through a signed MAR; tampered MAR rejected | — |

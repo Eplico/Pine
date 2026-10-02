@@ -673,13 +673,22 @@ class Run:
                 let natural = await measure();
                 root.removeAttribute("evergreen-natural-sizes");
                 let evergreen = await measure();
-                // What holds the toolbar at its height, for failure messages.
+                // What holds the toolbar at its height, for failure messages:
+                // the toolbar's items at their own height (not stretched).
                 let nav = d.getElementById("nav-bar");
+                let sheet = "data:text/css," + encodeURIComponent(
+                  "#nav-bar, #nav-bar-customization-target, .titlebar-buttonbox-container, .titlebar-buttonbox" +
+                  " { align-items: flex-start !important; }");
+                w.windowUtils.loadSheetUsingURIString(sheet, w.windowUtils.AUTHOR_SHEET);
+                await sleep(150);
                 let tallest = [...nav.querySelectorAll("*")]
-                  .map(e => [e, e.getBoundingClientRect().height])
-                  .filter(([e, h]) => h >= evergreen.nav - 1 && e.getBoundingClientRect().width > 0)
-                  .map(([e, h]) => `${e.localName}${e.id ? "#" + e.id : ""}.${[...e.classList].join(".")}=${Math.round(h)}`)
-                  .slice(0, 12);
+                  .filter(e => e.getBoundingClientRect().width > 0)
+                  .map(e => [e, e.getBoundingClientRect().height, w.getComputedStyle(e).minHeight])
+                  .sort((a, b) => b[1] - a[1])
+                  .slice(0, 8)
+                  .map(([e, h, min]) => `${e.localName}${e.id ? "#" + e.id : ""}.${[...e.classList].join(".")}=${Math.round(h)} (min ${min})`);
+                w.windowUtils.removeSheetUsingURIString(sheet, w.windowUtils.AUTHOR_SHEET);
+                tallest.unshift(`nav-bar min-height ${w.getComputedStyle(nav).minHeight}, padding ${w.getComputedStyle(nav).paddingBlock}`);
                 return { natural, evergreen, major: parseInt(Services.appinfo.version), tallest,
                   window: ["sizemode", "customtitlebar", "tabsintitlebar", "inFullscreen"]
                     .map(a => `${a}=${root.getAttribute(a)}`).join(" ") };
