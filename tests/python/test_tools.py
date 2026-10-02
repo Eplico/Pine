@@ -10,6 +10,7 @@ import contextlib
 import io
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tarfile
@@ -23,7 +24,7 @@ REPO = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 sys.path.insert(0, str(REPO / "tools"))
 
-from eg import checks, config, dev, patches, prefs, prepare, release, upstream  # noqa: E402
+from eg import checks, config, dev, patches, prefs, prepare, release, sfxstub, upstream  # noqa: E402
 from eg.config import EgError, ReleaseKey, Upstream  # noqa: E402
 
 
@@ -253,13 +254,20 @@ class PrepareTest(unittest.TestCase):
             "mach": "#!/usr/bin/env python3\n",
             "browser/components/moz.build": (FIXTURES / "browser-components-moz.build").read_text(),
             "browser/installer/package-manifest.in": (FIXTURES / "browser-installer-package-manifest.in").read_text(),
+            "browser/installer/windows/Makefile.in": (FIXTURES / "browser-installer-windows-Makefile.in").read_text(),
             "browser/branding/unofficial/configure.sh": "MOZ_APP_DISPLAYNAME=Nightly\n",
             "browser/branding/unofficial/locales/en-US/brand.ftl": "-brand-short-name = Nightly\n",
             "browser/branding/unofficial/firefox.ico": "upstream icon",
         }
+        # Firefox's installer stub, with its icon slots' real sizes.
+        self.stub = make_pe(
+            {1: b"\1" * 1320, 2: b"\2" * 5160, 3: b"\3" * 11560, 4: b"\4" * 43467},
+            [(16, 1), (32, 2), (48, 3), (256, 4)],
+        )
+        files = {name: text.encode() for name, text in files.items()}
+        files["other-licenses/7zstub/firefox/7zSD.Win32.sfx"] = self.stub
         with tarfile.open(self.tarball, "w:xz") as tar:
-            for name, text in files.items():
-                data = text.encode()
+            for name, data in files.items():
                 info = tarfile.TarInfo(f"firefox-157.0/{name}")
                 info.size = len(data)
                 tar.addfile(info, io.BytesIO(data))
@@ -269,6 +277,12 @@ class PrepareTest(unittest.TestCase):
         self.assertIn('"evergreen",', (tree / "browser/components/moz.build").read_text())
         self.assertTrue((tree / "browser/installer/package-manifest.in").read_text()
                         .endswith("@RESPATH@/distribution/extensions/*\n"))
+        self.assertIn("SFX_MODULE = $(topsrcdir)/$(MOZ_BRANDING_DIRECTORY)/7zSD.Win32.sfx",
+                      (tree / "browser/installer/windows/Makefile.in").read_text())
+        branded = (tree / "browser/branding/evergreen/7zSD.Win32.sfx").read_bytes()
+        self.assertEqual(len(branded), len(self.stub))
+        self.assertNotEqual(branded, self.stub)
+        self.assertTrue((tree / "browser/branding/evergreen/wizWatermark.bmp").exists())
         comp = tree / "browser/components/evergreen"
         self.assertTrue((comp / "EvergreenWindow.sys.mjs").exists())
         branding_prefs = (tree / prepare.BRANDING_PREFS).read_text()
@@ -393,6 +407,109 @@ class MirrorTest(unittest.TestCase):
     def test_retry_delay_is_capped(self):
         self.assertEqual(checks._retry_delay(self.http_error(429, "3600"), 0), 120)
         self.assertEqual(checks._retry_delay(self.http_error(503), 9), 60)
+
+
+def make_pe(icons: dict[int, bytes], group: list[tuple[int, int]]) -> bytes:
+    """A minimal PE32 file whose only section holds icon resources.
+
+    icons: resource id -> image bytes; group: (width, icon id) entries of the
+    one icon group.
+    """
+    rva, raw = 0x1000, 0x200
+
+    def directory(entries):  # [(id, offset, is_subdirectory)]
+        out = struct.pack("<IIHHHH", 0, 0, 0, 0, 0, len(entries))
+        for rid, off, sub in entries:
+            out += struct.pack("<II", rid, off | (0x80000000 if sub else 0))
+        return out
+
+    blobs = dict(icons)
+    grp = struct.pack("<HHH", 0, 1, len(group)) + b"".join(
+        struct.pack("<BBBBHHIH", w % 256, w % 256, 0, 0, 1, 32, len(icons[i]), i) for w, i in group
+    )
+    leaves = [(3, i) for i in sorted(icons)] + [(14, 1)]
+    # Layout: root, two type directories, one language directory per leaf,
+    # data entries, then the data.
+    root_size = 16 + 2 * 8
+    type_sizes = {3: 16 + 8 * len(icons), 14: 16 + 8}
+    type_off = {3: root_size, 14: root_size + type_sizes[3]}
+    lang_off, off = {}, root_size + type_sizes[3] + type_sizes[14]
+    for leaf in leaves:
+        lang_off[leaf] = off
+        off += 16 + 8
+    entry_off = {}
+    for leaf in leaves:
+        entry_off[leaf] = off
+        off += 16
+    data_off = {}
+    for leaf in leaves:
+        data_off[leaf] = off
+        off += len(blobs[leaf[1]] if leaf[0] == 3 else grp)
+    rsrc = directory([(3, type_off[3], True), (14, type_off[14], True)])
+    rsrc += directory([(i, lang_off[(3, i)], True) for i in sorted(icons)])
+    rsrc += directory([(1, lang_off[(14, 1)], True)])
+    for leaf in leaves:
+        rsrc += directory([(1033, entry_off[leaf], False)])
+    for leaf in leaves:
+        size = len(blobs[leaf[1]] if leaf[0] == 3 else grp)
+        rsrc += struct.pack("<IIII", rva + data_off[leaf], size, 0, 0)
+    for leaf in leaves:
+        rsrc += blobs[leaf[1]] if leaf[0] == 3 else grp
+
+    pe_off = 0x40
+    head = bytearray(raw)
+    head[0:2] = b"MZ"
+    struct.pack_into("<I", head, 0x3C, pe_off)
+    head[pe_off:pe_off + 4] = b"PE\0\0"
+    struct.pack_into("<HHIIIHH", head, pe_off + 4, 0x14C, 1, 0, 0, 0, 224, 0x102)
+    opt = pe_off + 24
+    struct.pack_into("<H", head, opt, 0x10B)
+    struct.pack_into("<II", head, opt + 96 + 2 * 8, rva, len(rsrc))
+    table = opt + 224
+    head[table:table + 8] = b".rsrc\0\0\0"
+    struct.pack_into("<IIII", head, table + 8, len(rsrc), rva, len(rsrc), raw)
+    return bytes(head) + rsrc
+
+
+def make_ico(images: dict[int, bytes]) -> bytes:
+    out = struct.pack("<HHH", 0, 1, len(images))
+    offset = 6 + 16 * len(images)
+    for w, data in images.items():
+        out += struct.pack("<BBBBHHII", w % 256, w % 256, 0, 0, 1, 32, len(data), offset)
+        offset += len(data)
+    return out + b"".join(images.values())
+
+
+class SfxStubTest(unittest.TestCase):
+    def test_replaces_icons_in_place(self):
+        stub = make_pe({1: b"A" * 40, 2: b"B" * 90}, [(16, 1), (256, 2)])
+        out = sfxstub.replace_icons(stub, make_ico({16: b"x" * 30, 256: b"y" * 90}))
+        self.assertEqual(len(out), len(stub))
+        pe = sfxstub._Pe(bytearray(out))
+        icons = {}
+        for rid, leaf in pe.resources(sfxstub.RT_ICON):
+            rva, size = struct.unpack_from("<II", out, leaf)
+            icons[rid] = out[pe.offset(rva):pe.offset(rva) + size]
+        self.assertEqual(icons, {1: b"x" * 30, 2: b"y" * 90})
+        (_, group_leaf), = pe.resources(sfxstub.RT_GROUP_ICON)
+        rva, _ = struct.unpack_from("<II", out, group_leaf)
+        sizes = [struct.unpack_from("<I", out, pe.offset(rva) + 6 + 14 * i + 8)[0] for i in range(2)]
+        self.assertEqual(sizes, [30, 90])
+
+    def test_refuses_larger_or_missing_images(self):
+        stub = make_pe({1: b"A" * 40}, [(16, 1)])
+        with self.assertRaisesRegex(EgError, "room for 40"):
+            sfxstub.replace_icons(stub, make_ico({16: b"x" * 41}))
+        with self.assertRaisesRegex(EgError, "no 16 px image"):
+            sfxstub.replace_icons(stub, make_ico({32: b"x"}))
+        with self.assertRaisesRegex(EgError, "not a Windows executable"):
+            sfxstub.replace_icons(b"nope" * 100, make_ico({16: b"x"}))
+
+    def test_repo_icon_fits_its_own_formats(self):
+        images = sfxstub.read_ico((config.BRANDING_DIR / "source" / "installer-stub.ico").read_bytes())
+        self.assertEqual(sorted(images), [16, 32, 48, 256])
+        self.assertEqual(images[256][:4], b"\x89PNG")
+        self.assertEqual(struct.unpack_from("<IiiHH", images[48]), (40, 48, 96, 1, 32))
 
 
 class ReleaseTest(unittest.TestCase):

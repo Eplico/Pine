@@ -26,6 +26,7 @@ import tarfile
 from pathlib import Path
 
 from . import patches as patchlib
+from . import sfxstub
 from .config import (
     BRANDING_DIR,
     MOZCONFIGS_DIR,
@@ -113,6 +114,9 @@ def overlay(src_root: Path, tree: Path, owned: set[str]) -> list[str]:
     return rels
 
 
+INSTALLER_STUB = Path("other-licenses/7zstub/firefox/7zSD.Win32.sfx")
+
+
 def make_branding(tree: Path) -> list[str]:
     """browser/branding/evergreen = Firefox's unofficial branding + our files."""
     dest = tree / "browser/branding/evergreen"
@@ -130,6 +134,12 @@ def make_branding(tree: Path) -> list[str]:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, target)
         copied.append((Path("browser/branding/evergreen") / rel).as_posix())
+    # The installer's self-extracting stub, with Evergreen's icon (patch 0003).
+    stub = tree / INSTALLER_STUB
+    if stub.exists():
+        icon = (BRANDING_DIR / "source" / "installer-stub.ico").read_bytes()
+        (dest / INSTALLER_STUB.name).write_bytes(sfxstub.replace_icons(stub.read_bytes(), icon))
+        copied.append((Path("browser/branding/evergreen") / INSTALLER_STUB.name).as_posix())
     return copied
 
 

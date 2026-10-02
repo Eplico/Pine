@@ -1,0 +1,21 @@
+Evergreen-Patch: installer-stub-from-branding
+Why: The installer .exe is a 7-Zip self-extracting stub followed by the
+  packaged files, so Windows shows the stub's icon for it: Firefox's stub
+  carries the Firefox logo. Take the stub from the branding directory,
+  where `eg.py prepare` writes a copy with Evergreen's icon
+  (tools/eg/sfxstub.py).
+Upstream: not upstreamable (Mozilla ships one brand's stub)
+Drop-when: Firefox takes the stub's icon from the branding directory
+Owner: Evergreen maintainers
+
+--- a/browser/installer/windows/Makefile.in
++++ b/browser/installer/windows/Makefile.in
+@@ -8,7 +8,7 @@
+ ifeq ($(TARGET_CPU), aarch64)
+ SFX_MODULE = $(topsrcdir)/other-licenses/7zstub/firefox/7zSD.ARM64.sfx
+ else
+-SFX_MODULE = $(topsrcdir)/other-licenses/7zstub/firefox/7zSD.Win32.sfx
++SFX_MODULE = $(topsrcdir)/$(MOZ_BRANDING_DIRECTORY)/7zSD.Win32.sfx
+ endif
+ 
+ INSTALLER_FILES = \

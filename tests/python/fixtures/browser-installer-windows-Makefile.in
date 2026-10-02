@@ -1,0 +1,16 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+include $(topsrcdir)/toolkit/mozapps/installer/package-name.mk
+
+CONFIG_DIR = instgen
+ifeq ($(TARGET_CPU), aarch64)
+SFX_MODULE = $(topsrcdir)/other-licenses/7zstub/firefox/7zSD.ARM64.sfx
+else
+SFX_MODULE = $(topsrcdir)/other-licenses/7zstub/firefox/7zSD.Win32.sfx
+endif
+
+INSTALLER_FILES = \
+  app.tag \
+  nsis/content/installing.html \
