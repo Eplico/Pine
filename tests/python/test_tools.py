@@ -181,19 +181,25 @@ class GpgVerifyTest(unittest.TestCase):
         env = dict(os.environ, GNUPGHOME=str(home))
         gpg = upstream.find_gpg()
 
-        def run(*args, **kw):
-            return subprocess.run([gpg, "--batch", "--yes", *args], env=env, check=True,
-                                  capture_output=True, text=True, **kw)
+        def run(*args):
+            result = subprocess.run([gpg, "--batch", "--yes", *args], env=env,
+                                    capture_output=True, text=True)
+            if result.returncode:
+                raise RuntimeError(f"gpg {' '.join(args)} failed:\n{result.stderr}")
+            return result
 
-        run("--passphrase", "", "--quick-gen-key", "Test Release <test@example.invalid>", "ed25519", "cert", "1d")
+        # Loopback pinentry: gpg-agent must not try to open a passphrase dialog
+        # (it does on Windows).
+        nopin = ("--pinentry-mode", "loopback", "--passphrase", "")
+        run(*nopin, "--quick-gen-key", "Test Release <test@example.invalid>", "ed25519", "cert", "1d")
         listing = run("--with-colons", "--list-keys").stdout
         cls.primary = [ln.split(":")[9] for ln in listing.splitlines() if ln.startswith("fpr")][0]
-        run("--passphrase", "", "--quick-add-key", cls.primary, "ed25519", "sign", "1d")
+        run(*nopin, "--quick-add-key", cls.primary, "ed25519", "sign", "1d")
         listing = run("--with-colons", "--list-keys").stdout
         cls.subkey = [ln.split(":")[9] for ln in listing.splitlines() if ln.startswith("fpr")][1]
         cls.data = cls.tmp / "SHA512SUMS"
         cls.data.write_text("abc  source/x.tar.xz\n")
-        run("--pinentry-mode", "loopback", "--passphrase", "", "--armor", "--detach-sign",
+        run(*nopin, "--armor", "--detach-sign",
             "-o", str(cls.tmp / "SHA512SUMS.asc"), str(cls.data))
         (cls.tmp / "KEY").write_text(run("--armor", "--export", cls.primary).stdout)
 

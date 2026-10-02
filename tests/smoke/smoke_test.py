@@ -58,6 +58,16 @@ const tabByTitle = t => gB.tabs.find(x => x.label == t);
 const nextTabOpen = () => new Promise(r =>
   gB.tabContainer.addEventListener("TabOpen", e => r(e.target), { once: true }));
 const space = name => SpacesStore.state.spaces.find(s => (s.name || c.defaultName) == name);
+// Errors from Evergreen code: script errors and console.error() calls.
+const evergreenConsoleErrors = () => {
+  let scriptErrors = Services.console.getMessageArray()
+    .filter(m => m instanceof Ci.nsIScriptError && !(m.flags & Ci.nsIScriptError.warningFlag))
+    .map(m => `${m.sourceName}:${m.lineNumber} ${m.errorMessage}`);
+  let apiErrors = Cc["@mozilla.org/consoleAPI-storage;1"].getService(Ci.nsIConsoleAPIStorage)
+    .getEvents().filter(e => e.level == "error")
+    .map(e => `${e.filename}:${e.lineNumber} ` + e.arguments.map(a => String(a?.message ?? a)).join(" "));
+  return [...scriptErrors, ...apiErrors].filter(s => /evergreen/i.test(s));
+};
 """
 
 
@@ -225,16 +235,19 @@ class Run:
         def first_run():
             r = self.js(
                 """
-                await until(() => Services.prefs.getBoolPref("evergreen.defaults.searchEngineApplied", false), 20000);
+                await until(() => Services.prefs.getBoolPref("evergreen.defaults.searchEngineApplied", false), 20000)
+                  .catch(e => { throw new Error(e.message + " / " + evergreenConsoleErrors().join(" / ")); });
                 await until(() => Services.prefs.getBoolPref("evergreen.defaults.strictTrackingProtectionApplied", false), 20000);
                 await sleep(500);
-                let engine = await Services.search.getDefault();
+                let { getSearchService } = ChromeUtils.importESModule("resource://evergreen/EvergreenStartup.sys.mjs");
+                let search = getSearchService().service;
+                let engine = await search.getDefault();
                 return {
                   etp: Services.prefs.getStringPref("browser.contentblocking.category", ""),
                   trackingProtection: Services.prefs.getBoolPref("privacy.trackingprotection.enabled"),
                   engine: engine.name,
-                  google: !!Services.search.getEngineByName("Google"),
-                  ddg: !!Services.search.getEngineByName("DuckDuckGo"),
+                  google: !!search.getEngineByName("Google"),
+                  ddg: !!search.getEngineByName("DuckDuckGo"),
                 };
                 """
             )
@@ -510,14 +523,7 @@ class Run:
             return "no Spaces UI or persistence in private windows"
 
         def console_errors():
-            r = self.js(
-                """
-                return Services.console.getMessageArray()
-                  .filter(m => m instanceof Ci.nsIScriptError && !(m.flags & Ci.nsIScriptError.warningFlag))
-                  .map(m => `${m.sourceName}:${m.lineNumber} ${m.errorMessage}`)
-                  .filter(s => /evergreen/i.test(s));
-                """
-            )
+            r = self.js("return evergreenConsoleErrors();")
             assert not r, "\n  " + "\n  ".join(r)
 
         self.check("Evergreen loads into the window", loads)
