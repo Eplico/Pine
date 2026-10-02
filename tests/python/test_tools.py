@@ -23,7 +23,7 @@ REPO = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 sys.path.insert(0, str(REPO / "tools"))
 
-from eg import config, dev, patches, prefs, prepare, release, upstream  # noqa: E402
+from eg import checks, config, dev, patches, prefs, prepare, release, upstream  # noqa: E402
 from eg.config import EgError, ReleaseKey, Upstream  # noqa: E402
 
 
@@ -324,6 +324,44 @@ class DevHarnessTest(unittest.TestCase):
         self.assertEqual(dev.Layout(root, "linux").pref_dir, root / "defaults" / "pref")
         mac = dev.Layout(Path("/Applications/Firefox.app"), "macos")
         self.assertEqual(mac.cfg, Path("/Applications/Firefox.app/Contents/Resources/evergreen-dev.cfg"))
+
+
+class MirrorTest(unittest.TestCase):
+    def http_error(self, code, retry_after=None):
+        import email.message
+        import urllib.error
+
+        headers = email.message.Message()
+        if retry_after is not None:
+            headers["Retry-After"] = retry_after
+        return urllib.error.HTTPError("https://mirror.example/x", code, "error", headers, None)
+
+    def test_retries_rate_limits(self):
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        replies = [self.http_error(429, "7"), self.http_error(429), Resp(b"ok")]
+
+        def urlopen(request, timeout):
+            reply = replies.pop(0)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+        with mock.patch.dict(os.environ, {}, clear=False), \
+                mock.patch("urllib.request.urlopen", urlopen), \
+                mock.patch.object(checks.time, "sleep") as sleep:
+            os.environ.pop("EG_MIRROR_TOKEN", None)
+            self.assertEqual(checks.fetch_mirror_file(make_upstream(), "TAG", "a/b.js"), "ok")
+        self.assertEqual([c.args[0] for c in sleep.call_args_list], [7, 4])
+
+    def test_retry_delay_is_capped(self):
+        self.assertEqual(checks._retry_delay(self.http_error(429, "3600"), 0), 120)
+        self.assertEqual(checks._retry_delay(self.http_error(503), 9), 60)
 
 
 class ReleaseTest(unittest.TestCase):

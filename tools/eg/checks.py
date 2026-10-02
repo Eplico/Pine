@@ -28,7 +28,15 @@ def mirror_url(up: Upstream, ref: str, path: str) -> str:
     return f"{up.mirror.rstrip('/')}/{ref}/{path}"
 
 
-def fetch_mirror_file(up: Upstream, ref: str, path: str, attempts: int = 5) -> str | None:
+def _retry_delay(error: urllib.error.HTTPError, attempt: int) -> float:
+    """Seconds to wait before retrying: Retry-After if given, else 2, 4, 8, ... 60."""
+    retry_after = error.headers.get("Retry-After") if error.headers else None
+    if retry_after and retry_after.strip().isdigit():
+        return min(int(retry_after), 120)
+    return min(2 ** (attempt + 1), 60)
+
+
+def fetch_mirror_file(up: Upstream, ref: str, path: str, attempts: int = 8) -> str | None:
     """Fetch one file from Mozilla's GitHub mirror (None if it does not exist).
 
     Requests are anonymous unless EG_MIRROR_TOKEN is set (CI sets it to raise
@@ -52,7 +60,8 @@ def fetch_mirror_file(up: Upstream, ref: str, path: str, attempts: int = 5) -> s
             if e.code == 404:
                 return None
             if e.code in (429, 500, 502, 503) and attempt < attempts - 1:
-                time.sleep(2 ** (attempt + 1))  # 2, 4, 8, 16 s
+                # Shared CI runners hit GitHub's rate limit now and then.
+                time.sleep(_retry_delay(e, attempt))
                 continue
             raise EgError(f"Mirror request failed for {path}: {e}") from e
     raise EgError(f"Mirror request failed for {path}: too many retries")
