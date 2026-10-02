@@ -359,6 +359,37 @@ class MirrorTest(unittest.TestCase):
             self.assertEqual(checks.fetch_mirror_file(make_upstream(), "TAG", "a/b.js"), "ok")
         self.assertEqual([c.args[0] for c in sleep.call_args_list], [7, 4])
 
+    def test_token_uses_the_api_first(self):
+        up = make_upstream(mirror="https://raw.githubusercontent.com/mozilla-firefox/firefox/")
+        seen = []
+
+        def urlopen(request, timeout):
+            seen.append((request.full_url, request.get_header("Authorization")))
+            raise self.http_error(404)
+
+        with mock.patch.dict(os.environ, {"EG_MIRROR_TOKEN": "t0ken"}), \
+                mock.patch("urllib.request.urlopen", urlopen):
+            # 404 with a token is not trusted; anonymous 404 means "no such file".
+            self.assertIsNone(checks.fetch_mirror_file(up, "FIREFOX_157_0_RELEASE", "browser/app/moz.build"))
+        self.assertEqual(seen, [
+            ("https://api.github.com/repos/mozilla-firefox/firefox/contents/browser/app/moz.build"
+             "?ref=FIREFOX_157_0_RELEASE", "Bearer t0ken"),
+            ("https://raw.githubusercontent.com/mozilla-firefox/firefox/FIREFOX_157_0_RELEASE/browser/app/moz.build",
+             None),
+        ])
+
+    def test_gives_up_when_every_source_is_rate_limited(self):
+        def urlopen(request, timeout):
+            raise self.http_error(429)
+
+        up = make_upstream(mirror="https://raw.githubusercontent.com/o/r/")
+        with mock.patch.dict(os.environ, {"EG_MIRROR_TOKEN": "t"}), \
+                mock.patch("urllib.request.urlopen", urlopen), \
+                mock.patch.object(checks.time, "sleep") as sleep, \
+                self.assertRaisesRegex(EgError, "429"):
+            checks.fetch_mirror_file(up, "TAG", "a.js")
+        self.assertEqual(sleep.call_count, 9)  # three sources, three waits each
+
     def test_retry_delay_is_capped(self):
         self.assertEqual(checks._retry_delay(self.http_error(429, "3600"), 0), 120)
         self.assertEqual(checks._retry_delay(self.http_error(503), 9), 60)
