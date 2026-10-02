@@ -689,7 +689,7 @@ class Run:
                   .map(([e, h, min]) => `${e.localName}${e.id ? "#" + e.id : ""}.${[...e.classList].join(".")}=${Math.round(h)} (min ${min})`);
                 w.windowUtils.removeSheetUsingURIString(sheet, w.windowUtils.AUTHOR_SHEET);
                 tallest.unshift(`nav-bar min-height ${w.getComputedStyle(nav).minHeight}, padding ${w.getComputedStyle(nav).paddingBlock}`);
-                return { natural, evergreen, major: parseInt(Services.appinfo.version), tallest,
+                return { natural, evergreen, nova: Services.prefs.getBoolPref("browser.nova.enabled", false), tallest,
                   window: ["sizemode", "customtitlebar", "tabsintitlebar", "inFullscreen"]
                     .map(a => `${a}=${root.getAttribute(a)}`).join(" ") };
                 """
@@ -698,8 +698,9 @@ class Run:
             side = r["evergreen"]["sidebar"] / r["natural"]["sidebar"]
             detail = f"toolbar {r['natural']['nav']:.0f} -> {r['evergreen']['nav']:.0f}px ({nav:.0%}), " \
                      f"sidebar {r['natural']['sidebar']:.0f} -> {r['evergreen']['sidebar']:.0f}px ({side:.0%})"
-            if r["major"] < 150:
-                return detail + " (sizes are tuned for Firefox 150+; not checked)"
+            if not r["nova"]:
+                # Evergreen's sizes target Firefox's current design (Nova, 157+).
+                return detail + " (older Firefox design; not checked)"
             assert 0.74 <= nav <= 0.86, f"{detail}; {r['window']}; tallest in the toolbar: {r['tallest']}"
             assert 0.60 <= side <= 0.72, detail
             return detail

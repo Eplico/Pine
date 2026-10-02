@@ -46,6 +46,12 @@
   --urlbar-container-height: 32px;
 }
 
+/* Some Firefox versions also give the address bar's container a fixed minimum
+ * height; keep it in step with the sizes above. */
+:root[evergreen]:not([evergreen-natural-sizes]) #urlbar-container {
+  min-height: calc(var(--urlbar-height) + 2 * var(--urlbar-container-padding-block));
+}
+
 #nav-bar[evergreen-aligned] #nav-bar-customization-target > * {
   transition: margin-inline-start 180ms ease-out;
 }
@@ -278,7 +284,13 @@
 
 @media (prefers-reduced-motion: reduce) {
   :root[evergreen-sidebar-collapsed] :is(#sidebar-container, box#sidebar-main),
-  #nav-bar[evergreen-aligned] #nav-bar-customization-target > * {
+  /* Some Firefox versions also give the address bar's container a fixed minimum
+ * height; keep it in step with the sizes above. */
+:root[evergreen]:not([evergreen-natural-sizes]) #urlbar-container {
+  min-height: calc(var(--urlbar-height) + 2 * var(--urlbar-container-padding-block));
+}
+
+#nav-bar[evergreen-aligned] #nav-bar-customization-target > * {
     transition: none;
   }
 }
