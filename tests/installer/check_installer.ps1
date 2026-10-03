@@ -13,7 +13,8 @@ Checks that:
   - no window it opens is titled with Firefox's name (the self-extractor shows
     a progress window while it unpacks);
   - the welcome page's left panel shows Evergreen's image (mostly green), not
-    a blank or black panel.
+    a blank or black panel;
+  - the next page's header shows Evergreen's icon (green, at its right).
 Prints the colours it sampled from the panel, so a failure can be read from
 the log alone. Exits 1 when a check fails.
 
@@ -43,6 +44,8 @@ public static class EgWin {
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdc, uint flags);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr hWnd, int id);
+  [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr w, IntPtr l);
 }
 
 // Display scaling, through the display-config calls Windows' settings app
@@ -182,9 +185,9 @@ try {
 
   $shot = Save-Window $page "welcome-$dpi-dpi"
   # The image fills the left 164 x 314 dialog pixels of the page (at 96 dpi).
-  $scale = $dpi / 96.0
-  $panelW = [int](164 * $scale)
-  $panelH = [int](314 * $scale)
+  $factor = $dpi / 96.0
+  $panelW = [int](164 * $factor)
+  $panelH = [int](314 * $factor)
   $sum = @(0, 0, 0)
   $count = 0
   $green = 0
@@ -206,6 +209,24 @@ try {
   "  mean #{0:x2}{1:x2}{2:x2}; {3} of {4} samples green" -f [int]($sum[0] / $count), [int]($sum[1] / $count), [int]($sum[2] / $count), $green, $count
   if ($green -lt $count / 2) {
     $failures.Add("the welcome page's left panel does not show Evergreen's image (see the sampled colours)")
+  }
+
+  # Next (the wizard's button 1): the options page, whose header has the icon.
+  [EgWin]::SendMessage([EgWin]::GetDlgItem($page.MainWindowHandle, 1), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null  # BM_CLICK
+  Start-Sleep -Seconds 2
+  $shot = Save-Window $page "options-$dpi-dpi"
+  $headerH = [int](57 * $factor)
+  $headerW = [int](150 * $factor)
+  $greenPixels = 0
+  for ($y = 0; $y -lt $headerH; $y += 2) {
+    for ($x = $shot.Width - $headerW; $x -lt $shot.Width; $x += 2) {
+      $c = $shot.Bitmap.GetPixel($shot.X + $x, $shot.Y + $y)
+      if ($c.G -gt $c.R + 40 -and $c.G -gt $c.B + 20) { $greenPixels++ }
+    }
+  }
+  "Options page header ($headerW x $headerH px at the right): $greenPixels green samples"
+  if ($greenPixels -lt 20) {
+    $failures.Add("the options page's header does not show Evergreen's icon")
   }
 } finally {
   # Close everything the installer started; nothing has been installed yet.
