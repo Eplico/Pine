@@ -98,8 +98,8 @@ function Save-Window($proc, [string] $name) {
 
 try {
   "Starting $Setup"
-  $setup = Watch-Windows 120
-  if (-not $setup) {
+  $page = Watch-Windows 120
+  if (-not $page) {
     throw "The installer's welcome page did not appear within two minutes"
   }
   Start-Sleep -Seconds 3  # let the page finish drawing
@@ -107,21 +107,21 @@ try {
   # window that is up now.
   Get-Process -Name setup -ErrorAction SilentlyContinue |
     ForEach-Object { "  setup.exe pid $($_.Id): window $($_.MainWindowHandle) '$($_.MainWindowTitle)'" }
-  $setup = Get-Process -Name setup -ErrorAction SilentlyContinue |
+  $page = Get-Process -Name setup -ErrorAction SilentlyContinue |
     Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -like '*Setup*' } |
     Select-Object -Last 1
-  if (-not $setup) {
+  if (-not $page) {
     throw "The installer's welcome page closed"
   }
-  $dpi = [EgWin]::GetDpiForWindow($setup.MainWindowHandle)
-  "Welcome page: '$($setup.MainWindowTitle)' at $dpi dpi"
+  $dpi = [EgWin]::GetDpiForWindow($page.MainWindowHandle)
+  "Welcome page: '$($page.MainWindowTitle)' at $dpi dpi"
 
   # The image the installer unpacked for the page.
   Get-ChildItem $env:TEMP -Filter 'ns*.tmp' -Directory -ErrorAction SilentlyContinue |
     ForEach-Object { Get-Item (Join-Path $_.FullName 'modern-wizard.bmp') -ErrorAction SilentlyContinue } |
     ForEach-Object { "  unpacked: $($_.FullName) ($($_.Length) bytes, sha256 $((Get-FileHash $_.FullName).Hash.Substring(0, 16)))" }
 
-  $shot = Save-Window $setup 'welcome'
+  $shot = Save-Window $page 'welcome'
   # The image fills the left 164 x 314 dialog pixels of the page (at 96 dpi).
   $scale = $dpi / 96.0
   $panelW = [int](164 * $scale)
