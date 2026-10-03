@@ -30,15 +30,18 @@ function fakeFixup() {
       }
       let scheme = text.match(/^([a-z-]+):/)?.[1];
       if (scheme) {
-        return { preferredURI: { scheme, spec: text }, keywordProviderName: "" };
+        return { preferredURI: { scheme, spec: text }, keywordAsSent: "" };
       }
       if (text.includes(".")) {
-        return { preferredURI: { scheme: "https", spec: `https://${text}/` }, keywordProviderName: "" };
+        return { preferredURI: { scheme: "https", spec: `https://${text}/` }, keywordAsSent: "" };
       }
-      let engine = flags & 16 ? "DuckDuckGo" : "Ecosia";
+      // As Firefox 157 reports a search: the engine's id and the words sent.
+      let engine = flags & 16 ? "ddg" : "ecosia";
       return {
         preferredURI: { scheme: "https", spec: `https://search.example/?q=${encodeURIComponent(text)}` },
-        keywordProviderName: engine,
+        keywordProviderId: engine,
+        keywordAsSent: text,
+        postData: text == "post me" ? "q=post+me" : null,
       };
     },
   };
@@ -49,14 +52,21 @@ test("words search with the default engine", () => {
   assert.deepEqual(resolveInput("  green trees ", { uriFixup }), {
     url: "https://search.example/?q=green%20trees",
     search: true,
+    postData: null,
   });
   assert.deepEqual(uriFixup.calls, [["green trees", 1 | 8]]);
+  // Engines that search by POST pass their form data along.
+  assert.equal(resolveInput("post me", { uriFixup }).postData, "q=post+me");
 });
 
 test("addresses open", () => {
   let uriFixup = fakeFixup();
-  assert.deepEqual(resolveInput("example.com", { uriFixup }), { url: "https://example.com/", search: false });
-  assert.deepEqual(resolveInput("about:robots", { uriFixup }), { url: "about:robots", search: false });
+  assert.deepEqual(resolveInput("example.com", { uriFixup }), {
+    url: "https://example.com/",
+    search: false,
+    postData: null,
+  });
+  assert.deepEqual(resolveInput("about:robots", { uriFixup }), { url: "about:robots", search: false, postData: null });
 });
 
 test("private windows ask for the private-browsing engine", () => {

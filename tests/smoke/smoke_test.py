@@ -424,10 +424,11 @@ class Run:
                 let escaped = { mode: box.getAttribute("mode"), opened: gB.tabs.length - count };
                 // The sidebar's + button does the same. An address and Enter: a
                 // new tab, at the top of the Space's tabs.
-                let plus = d.getElementById("vertical-tabs-newtab-button");
-                plus?.checkVisibility() ? plus.click() : w.BrowserCommands.openTab();
+                let plus = ["vertical-tabs-newtab-button", "tabs-newtab-button"]
+                  .map(id => d.getElementById(id)).find(b => b?.checkVisibility());
+                plus ? plus.click() : w.BrowserCommands.openTab();
                 await sleep(100);
-                let fromButton = { plus: !!plus?.checkVisibility(), mode: box.getAttribute("mode") };
+                let fromButton = { plus: plus?.id ?? null, mode: box.getAttribute("mode") };
                 input.value = "about:robots";
                 input.dispatchEvent(new w.Event("input", { bubbles: true }));
                 let opened = nextTabOpen();
@@ -475,7 +476,7 @@ class Run:
                 input.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
                 """
             )
-            plus = "the + button too" if r["fromButton"]["plus"] else "+ button not shown"
+            plus = f"and the + button, #{r['fromButton']['plus']}" if r["fromButton"]["plus"] else "+ button not shown"
             return f"Ctrl+T ({plus}) shows the search box and suggests visited pages; Enter opens a tab at the top, in the Space's container"
 
         def new_tab_at_top():

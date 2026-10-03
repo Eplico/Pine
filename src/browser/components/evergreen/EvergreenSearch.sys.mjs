@@ -41,8 +41,9 @@ function html(doc, tag, attrs = {}) {
 }
 
 /**
- * What typed text opens: { url, search } where search is true for a search
- * with the default engine. Null when it opens nothing.
+ * What typed text opens: { url, search, postData } where search is true for
+ * a search with the default engine (postData is set for engines that search
+ * by POST). Null when it opens nothing.
  */
 export function resolveInput(text, { isPrivate = false, uriFixup = Services.uriFixup } = {}) {
   text = text.trim();
@@ -63,7 +64,9 @@ export function resolveInput(text, { isPrivate = false, uriFixup = Services.uriF
   if (!uri || !OPENABLE_SCHEMES.has(uri.scheme)) {
     return null;
   }
-  return { url: uri.spec, search: !!info.keywordProviderName };
+  // keywordAsSent is set for a search in every version (Firefox 157 names
+  // the engine by keywordProviderId, older ones by keywordProviderName).
+  return { url: uri.spec, search: !!info.keywordAsSent, postData: info.postData ?? null };
 }
 
 export function isStartPage(spec) {
@@ -418,6 +421,10 @@ export class SearchBar {
     }
     let where = this.mode == "launcher" ? "tab" : "current";
     this.hide();
-    this.win.openTrustedLinkIn(result.url, where, { inBackground: false });
+    let params = { inBackground: false };
+    if (result.postData) {
+      params.postData = result.postData;
+    }
+    this.win.openTrustedLinkIn(result.url, where, params);
   }
 }
