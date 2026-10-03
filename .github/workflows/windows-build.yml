@@ -201,6 +201,9 @@ jobs:
           $setup = Get-ChildItem release\*-setup.exe | Select-Object -First 1
           if (-not $setup) { throw "No installer among the packages" }
           ./tests/installer/check_installer.ps1 -Setup $setup.FullName -OutDir C:\eg\dev\installer-ui
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # Again on a scaled display, as on most laptops.
+          ./tests/installer/check_installer.ps1 -Setup $setup.FullName -OutDir C:\eg\dev\installer-ui -Scale 150
 
       - name: Upload smoke-test diagnostics
         if: always()

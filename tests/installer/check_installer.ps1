@@ -17,11 +17,16 @@ Checks that:
 Prints the colours it sampled from the panel, so a failure can be read from
 the log alone. Exits 1 when a check fails.
 
-  pwsh tests/installer/check_installer.ps1 -Setup Evergreen-0.1-win64-setup.exe
+With -Scale, first sets the display's scaling (percent, as in Windows'
+display settings) to the nearest step the display allows, to check the
+installer as it looks on a scaled display.
+
+  pwsh tests/installer/check_installer.ps1 -Setup Evergreen-0.1-win64-setup.exe [-Scale 150]
 #>
 param(
   [Parameter(Mandatory = $true)] [string] $Setup,
-  [string] $OutDir = 'installer-ui'
+  [string] $OutDir = 'installer-ui',
+  [int] $Scale = 0
 )
 $ErrorActionPreference = 'Stop'
 
@@ -39,9 +44,63 @@ public static class EgWin {
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hWnd);
 }
+
+// Display scaling, through the display-config calls Windows' settings app
+// uses (device info types -3 and -4 are its get and set DPI scale).
+public static class EgDisplay {
+  [StructLayout(LayoutKind.Sequential)] struct LUID { public uint Low; public int High; }
+  [StructLayout(LayoutKind.Sequential)] struct PathSourceInfo { public LUID AdapterId; public uint Id; public uint ModeInfoIdx; public uint StatusFlags; }
+  [StructLayout(LayoutKind.Sequential)] struct PathTargetInfo {
+    public LUID AdapterId; public uint Id; public uint ModeInfoIdx; public int OutputTechnology; public int Rotation;
+    public int Scaling; public uint RefreshNum; public uint RefreshDen; public int ScanLineOrdering; public int TargetAvailable; public uint StatusFlags;
+  }
+  [StructLayout(LayoutKind.Sequential)] struct PathInfo { public PathSourceInfo Source; public PathTargetInfo Target; public uint Flags; }
+  [StructLayout(LayoutKind.Sequential, Size = 64)] struct ModeInfo { public int InfoType; }
+  [StructLayout(LayoutKind.Sequential)] struct Header { public int Type; public uint Size; public LUID AdapterId; public uint Id; }
+  [StructLayout(LayoutKind.Sequential)] struct ScaleGet { public Header Header; public int Min; public int Cur; public int Max; }
+  [StructLayout(LayoutKind.Sequential)] struct ScaleSet { public Header Header; public int Rel; }
+  [DllImport("user32.dll")] static extern int GetDisplayConfigBufferSizes(uint flags, out uint paths, out uint modes);
+  [DllImport("user32.dll")] static extern int QueryDisplayConfig(uint flags, ref uint paths, [Out] PathInfo[] pathArray, ref uint modes, [Out] ModeInfo[] modeArray, IntPtr topology);
+  [DllImport("user32.dll")] static extern int DisplayConfigGetDeviceInfo(ref ScaleGet info);
+  [DllImport("user32.dll")] static extern int DisplayConfigSetDeviceInfo(ref ScaleSet info);
+  static readonly int[] Steps = { 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500 };
+
+  static PathSourceInfo Primary() {
+    uint np, nm;
+    if (GetDisplayConfigBufferSizes(2, out np, out nm) != 0) throw new Exception("GetDisplayConfigBufferSizes failed");
+    var paths = new PathInfo[np]; var modes = new ModeInfo[nm];
+    if (QueryDisplayConfig(2, ref np, paths, ref nm, modes, IntPtr.Zero) != 0) throw new Exception("QueryDisplayConfig failed");
+    return paths[0].Source;
+  }
+
+  // Returns "current/recommended/allowed range" after setting the nearest
+  // allowed step to `percent`.
+  public static string SetScale(int percent) {
+    var src = Primary();
+    var get = new ScaleGet();
+    get.Header.Type = -3; get.Header.Size = (uint)Marshal.SizeOf(typeof(ScaleGet));
+    get.Header.AdapterId = src.AdapterId; get.Header.Id = src.Id;
+    if (DisplayConfigGetDeviceInfo(ref get) != 0) throw new Exception("reading the display scale failed");
+    int recommended = Math.Abs(get.Min);
+    int want = Array.IndexOf(Steps, percent);
+    if (want < 0) throw new Exception("not a scaling step: " + percent);
+    int rel = Math.Max(get.Min, Math.Min(get.Max, want - recommended));
+    var set = new ScaleSet();
+    set.Header.Type = -4; set.Header.Size = (uint)Marshal.SizeOf(typeof(ScaleSet));
+    set.Header.AdapterId = src.AdapterId; set.Header.Id = src.Id; set.Rel = rel;
+    if (DisplayConfigSetDeviceInfo(ref set) != 0) throw new Exception("setting the display scale failed");
+    return String.Format("set {0}% (recommended {1}%, allowed {2}% to {3}%)",
+      Steps[recommended + rel], Steps[recommended], Steps[recommended + get.Min], Steps[Math.Min(Steps.Length - 1, recommended + get.Max)]);
+  }
+}
 '@
 [EgWin]::SetProcessDPIAware() | Out-Null
 New-Item -ItemType Directory -Force $OutDir | Out-Null
+
+if ($Scale) {
+  "Display scaling: $([EgDisplay]::SetScale($Scale))"
+  Start-Sleep -Seconds 2
+}
 
 $failures = [System.Collections.Generic.List[string]]::new()
 $titles = [System.Collections.Generic.HashSet[string]]::new()
@@ -121,7 +180,7 @@ try {
     ForEach-Object { Get-Item (Join-Path $_.FullName 'modern-wizard.bmp') -ErrorAction SilentlyContinue } |
     ForEach-Object { "  unpacked: $($_.FullName) ($($_.Length) bytes, sha256 $((Get-FileHash $_.FullName).Hash.Substring(0, 16)))" }
 
-  $shot = Save-Window $page 'welcome'
+  $shot = Save-Window $page "welcome-$dpi-dpi"
   # The image fills the left 164 x 314 dialog pixels of the page (at 96 dpi).
   $scale = $dpi / 96.0
   $panelW = [int](164 * $scale)
