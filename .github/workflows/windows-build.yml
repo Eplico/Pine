@@ -234,10 +234,11 @@ jobs:
           }
           Set-Content -Path release-notes.md -Value $notes -Encoding utf8
           $files = Get-ChildItem release\* | ForEach-Object { $_.FullName }
-          $title = "Evergreen $version for Windows (preview)"
+          # A numbered release (shown as the repository's latest). A version is
+          # published once; bump VERSION for the next release.
+          $title = "Evergreen $version for Windows"
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
-            gh release create $env:GITHUB_REF_NAME @files --title $title --notes-file release-notes.md --prerelease --verify-tag
+            gh release create $env:GITHUB_REF_NAME @files --title $title --notes-file release-notes.md --verify-tag
           } else {
-            # A version is published once; bump VERSION for the next release.
-            gh release create "v$version" @files --title $title --notes-file release-notes.md --prerelease --target $sha
+            gh release create "v$version" @files --title $title --notes-file release-notes.md --target $sha
           }

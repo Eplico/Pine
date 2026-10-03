@@ -19,7 +19,7 @@ is the first platform.
 
 ## Download (Windows)
 
-Get the latest **[release](https://github.com/Eplico/Pine/releases)**:
+Get the **[latest release](https://github.com/Eplico/Pine/releases/latest)**:
 
 - **`Evergreen-0.1-win64-setup.exe`**: the installer.
 - **`Evergreen-0.1-win64-portable.zip`**: unzip anywhere and run `evergreen\evergreen.exe`.

@@ -117,7 +117,7 @@ Releases are built by the **Windows build** workflow
 3. The *test-and-publish* job runs the smoke test against the packaged
    `evergreen.exe`, opens the installer to check its windows
    (`tests/installer/check_installer.ps1`, at 100% and 150% display
-   scaling), and publishes a GitHub pre-release, "Evergreen <version>", with
+   scaling), and publishes the GitHub release "Evergreen <version> for Windows", with
    `SHA256SUMS.txt`.
 4. If a step fails, the *build-diagnostics* artifact has the mozconfig,
    `config.log` and a listing of the build's `dist\`; *smoke-diagnostics* has

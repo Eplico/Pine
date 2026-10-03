@@ -1,4 +1,4 @@
-**Evergreen @VERSION@ for Windows (64-bit)**: a preview of Evergreen, built on Firefox @FIREFOX@ (from Mozilla's source) by this repository's [Windows build workflow](@RUN_URL@).
+**Evergreen @VERSION@ for Windows (64-bit)**, built on Firefox @FIREFOX@ (from Mozilla's source) by this repository's [Windows build workflow](@RUN_URL@). Evergreen is an early preview.
 
 ### Download
 
@@ -14,7 +14,7 @@
 Get-FileHash .\Evergreen-@VERSION@-win64-setup.exe -Algorithm SHA256
 ```
 
-### What's in this preview
+### What's in Evergreen @VERSION@
 
 - A **start page** in the Space's colour with a search box under "Evergreen". **New tab** (`Ctrl+T` or the + button) opens a search box over the page, as in Arc: type and press Enter to open a new tab, or Escape to cancel. Both search with your default search engine and suggest pages from your history and bookmarks.
 - **New tabs open at the top** of the tab list.
