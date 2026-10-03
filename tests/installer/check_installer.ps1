@@ -103,6 +103,16 @@ try {
     throw "The installer's welcome page did not appear within two minutes"
   }
   Start-Sleep -Seconds 3  # let the page finish drawing
+  # The installer may restart itself (elevated) in a new process; take the
+  # window that is up now.
+  Get-Process -Name setup -ErrorAction SilentlyContinue |
+    ForEach-Object { "  setup.exe pid $($_.Id): window $($_.MainWindowHandle) '$($_.MainWindowTitle)'" }
+  $setup = Get-Process -Name setup -ErrorAction SilentlyContinue |
+    Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -like '*Setup*' } |
+    Select-Object -Last 1
+  if (-not $setup) {
+    throw "The installer's welcome page closed"
+  }
   $dpi = [EgWin]::GetDpiForWindow($setup.MainWindowHandle)
   "Welcome page: '$($setup.MainWindowTitle)' at $dpi dpi"
 
