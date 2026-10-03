@@ -42,7 +42,7 @@ public static class EgWin {
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hWnd, out RECT rect);
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hWnd, ref POINT point);
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdc, uint flags);
-  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
   [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr hWnd, int id);
   [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr w, IntPtr l);
@@ -97,13 +97,14 @@ public static class EgDisplay {
   }
 }
 '@
-[EgWin]::SetProcessDPIAware() | Out-Null
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 
 if ($Scale) {
   "Display scaling: $([EgDisplay]::SetScale($Scale))"
   Start-Sleep -Seconds 2
 }
+# Real pixels for every window, whatever the scaling was when pwsh started.
+[EgWin]::SetThreadDpiAwarenessContext([IntPtr]::new(-4)) | Out-Null  # per-monitor v2
 
 $failures = [System.Collections.Generic.List[string]]::new()
 $titles = [System.Collections.Generic.HashSet[string]]::new()
@@ -158,6 +159,17 @@ function Save-Window($proc, [string] $name) {
   }
 }
 
+# The colour at (x, y) of the client area in a Save-Window screenshot, or black
+# outside it.
+function Get-Sample($shot, [int] $x, [int] $y) {
+  $x += $shot.X
+  $y += $shot.Y
+  if ($x -lt 0 -or $y -lt 0 -or $x -ge $shot.Bitmap.Width -or $y -ge $shot.Bitmap.Height) {
+    return [System.Drawing.Color]::Black
+  }
+  return $shot.Bitmap.GetPixel($x, $y)
+}
+
 try {
   "Starting $Setup"
   $page = Watch-Windows 120
@@ -195,15 +207,14 @@ try {
   for ($row = 0; $row -lt 8; $row++) {
     $line = @()
     for ($col = 0; $col -lt 6; $col++) {
-      $x = $shot.X + [int](($col + 0.5) * $panelW / 6)
-      $y = $shot.Y + [int](($row + 0.5) * $panelH / 8)
-      $c = $shot.Bitmap.GetPixel($x, $y)
+      $c = Get-Sample $shot ([int](($col + 0.5) * $panelW / 6)) ([int](($row + 0.5) * $panelH / 8))
       $sum[0] += $c.R; $sum[1] += $c.G; $sum[2] += $c.B; $count++
       if ($c.G -gt $c.R + 25 -and $c.G -gt $c.B + 10) { $green++ }
       $line += '{0:x2}{1:x2}{2:x2}' -f $c.R, $c.G, $c.B
     }
     $grid += ($line -join ' ')
   }
+  "Window $($shot.Bitmap.Width) x $($shot.Bitmap.Height) px, page $($shot.Width) x $($shot.Height) px"
   "Left panel ($panelW x $panelH px), sampled colours:"
   $grid | ForEach-Object { "  $_" }
   "  mean #{0:x2}{1:x2}{2:x2}; {3} of {4} samples green" -f [int]($sum[0] / $count), [int]($sum[1] / $count), [int]($sum[2] / $count), $green, $count
@@ -220,7 +231,7 @@ try {
   $greenPixels = 0
   for ($y = 0; $y -lt $headerH; $y += 2) {
     for ($x = $shot.Width - $headerW; $x -lt $shot.Width; $x += 2) {
-      $c = $shot.Bitmap.GetPixel($shot.X + $x, $shot.Y + $y)
+      $c = Get-Sample $shot $x $y
       if ($c.G -gt $c.R + 40 -and $c.G -gt $c.B + 20) { $greenPixels++ }
     }
   }
