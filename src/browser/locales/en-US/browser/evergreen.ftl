@@ -121,3 +121,22 @@ evergreen-sidebar-button-hide =
 evergreen-sidebar-button-show =
     .label = Show sidebar
     .tooltiptext = Show sidebar ({ $shortcut })
+
+## Start page and new-tab search box
+
+# Shown above the search box on the start page. The browser's name.
+evergreen-search-title = Evergreen
+# Variables:
+#   $engine (String) - The default search engine's name, e.g. "Ecosia".
+evergreen-search-input =
+    .placeholder = Search with { $engine } or enter an address
+    .aria-label = Search with { $engine } or enter an address
+evergreen-search-input-no-engine =
+    .placeholder = Search or enter an address
+    .aria-label = Search or enter an address
+# Beside a typed search. Variables:
+#   $engine (String) - The default search engine's name, e.g. "Ecosia".
+evergreen-search-row-search = Search with { $engine }
+evergreen-search-row-search-no-engine = Search
+# Beside a typed address.
+evergreen-search-row-visit = Open address

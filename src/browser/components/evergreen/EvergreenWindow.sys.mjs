@@ -26,6 +26,7 @@ import { isArchivable, isRecordable, makeEntry } from "./Archive.sys.mjs";
 import { ArchiveStore, archiveSettings } from "./ArchiveStore.sys.mjs";
 import { SpacesStore } from "./SpacesStore.sys.mjs";
 import { WindowLayout, applyToolbarLayout } from "./EvergreenLayout.sys.mjs";
+import { SearchBar } from "./EvergreenSearch.sys.mjs";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const STYLESHEET = new URL("evergreen.css", import.meta.url).href;
@@ -173,6 +174,9 @@ class WindowController {
     this.layout = new WindowLayout(win);
     this.layout.start();
     this._cleanups.push(() => this.layout.stop());
+    this.searchBar = new SearchBar(win);
+    this.searchBar.start();
+    this._cleanups.push(() => this.searchBar.stop());
 
     let tabs = this.gBrowser.tabContainer;
     this.listen(tabs, "TabOpen", e => this.onTabOpen(e.target));
@@ -417,13 +421,30 @@ class WindowController {
     }
     let controller = this;
     win.openTrustedLinkIn = function (url, where, params = {}) {
-      if ((where == "tab" || where == "tabshifted") && params.userContextId === undefined) {
+      let newTab = where == "tab" || where == "tabshifted";
+      if (!newTab) {
+        return original.call(this, url, where, params);
+      }
+      if (params.userContextId === undefined) {
         let userContextId = controller.activeSpace().userContextId;
         if (userContextId) {
           params = { ...params, userContextId };
         }
       }
-      return original.call(this, url, where, params);
+      // New tabs go to the top of the list, as in Arc. (Links opened from a
+      // page don't come through here; Firefox keeps them next to the page.)
+      let opened = null;
+      let onOpen = e => (opened ??= e.target);
+      let tabs = controller.gBrowser.tabContainer;
+      tabs.addEventListener("TabOpen", onOpen);
+      try {
+        return original.call(this, url, where, params);
+      } finally {
+        tabs.removeEventListener("TabOpen", onOpen);
+        if (opened && !opened.pinned && !params.relatedToCurrent) {
+          controller.gBrowser.moveTabToStart(opened);
+        }
+      }
     };
     this._cleanups.push(() => {
       win.openTrustedLinkIn = original;

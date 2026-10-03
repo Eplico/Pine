@@ -11,9 +11,11 @@
  */
 
 import { ArchiveStore } from "./ArchiveStore.sys.mjs";
-import { applyDefaultSearch, reconcileDefaultSearch } from "./SearchDefaults.sys.mjs";
+import { applyDefaultSearch, getSearchService, reconcileDefaultSearch } from "./SearchDefaults.sys.mjs";
 import { SpacesStore } from "./SpacesStore.sys.mjs";
 import { EvergreenWindow } from "./EvergreenWindow.sys.mjs";
+
+export { getSearchService };
 
 // Each first-run step records that it ran, so a step that fails (for example
 // search initialisation) is retried next start, and a choice the user makes
@@ -40,24 +42,6 @@ const SEARCH_SETTLE_MS = 1000;
 
 const ARCHIVE_CHECK_INTERVAL_MS = 10 * 60 * 1000;
 
-/**
- * The search service and its "unknown" change reason. Recent Firefox
- * releases (156 and 157 at least) replaced the XPCOM service
- * (Services.search) with an ES module; support both so the dev harness also
- * runs on older installed Firefox versions.
- */
-export function getSearchService() {
-  if (Services.search) {
-    return {
-      service: Services.search,
-      changeReason: Ci.nsISearchService.CHANGE_REASON_UNKNOWN,
-    };
-  }
-  let { SearchService } = ChromeUtils.importESModule(
-    "moz-src:///toolkit/components/search/SearchService.sys.mjs"
-  );
-  return { service: SearchService, changeReason: SearchService.CHANGE_REASON.UNKNOWN };
-}
 
 const PURGE_ALL = "browser:purge-session-history";
 const PURGE_DOMAIN = "browser:purge-session-history-for-domain";

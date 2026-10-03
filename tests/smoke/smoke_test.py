@@ -113,6 +113,7 @@ class Run:
     def __init__(self, args):
         self.args = args
         self.failures: list[str] = []
+        self.errors_before_restart: list[str] = []
         self.shots = Path(args.screenshots).resolve() if args.screenshots else None
         if self.shots:
             self.shots.mkdir(parents=True, exist_ok=True)
@@ -406,18 +407,142 @@ class Run:
             r = self.js(
                 """
                 if (!w.BrowserCommands?.openTab) return { skipped: true };
+                let d = w.document;
+                let box = d.getElementById("evergreen-search");
+                let input = d.getElementById("evergreen-search-input");
+                let key = k => input.dispatchEvent(new w.KeyboardEvent("keydown", { key: k, bubbles: true }));
+                let count = gB.tabs.length;
+                // Ctrl+T (the new-tab command) opens the search box, not a tab.
+                let command = d.getElementById("cmd_newNavigatorTab");
+                command ? command.doCommand() : w.BrowserCommands.openTab();
+                await sleep(150);
+                let shown = { hidden: box.hidden, mode: box.getAttribute("mode"), opened: gB.tabs.length - count,
+                  focused: d.activeElement == input, windowFocused: d.hasFocus() };
+                // Escape closes it without opening one.
+                key("Escape");
+                await sleep(50);
+                let escaped = { mode: box.getAttribute("mode"), opened: gB.tabs.length - count };
+                // The sidebar's + button does the same. An address and Enter: a
+                // new tab, at the top of the Space's tabs.
+                let plus = d.getElementById("vertical-tabs-newtab-button");
+                plus?.checkVisibility() ? plus.click() : w.BrowserCommands.openTab();
+                await sleep(100);
+                let fromButton = { plus: !!plus?.checkVisibility(), mode: box.getAttribute("mode") };
+                input.value = "about:robots";
+                input.dispatchEvent(new w.Event("input", { bubbles: true }));
                 let opened = nextTabOpen();
-                w.BrowserCommands.openTab();
+                key("Enter");
                 let t = await opened;
-                let ctx = t.userContextId, sp = t.getAttribute("evergreen-space");
+                await until(() => t.linkedBrowser.currentURI.spec == "about:robots");
+                let unpinned = gB.visibleTabs.filter(x => !x.pinned);
+                let result = { ctx: t.userContextId, sp: t.getAttribute("evergreen-space"), first: unpinned[0] == t,
+                  selected: gB.selectedTab == t, boxHidden: box.hidden, tabs: tabList() };
                 gB.removeTab(t);
-                return { ctx, sp, workCtx: space("Work").userContextId, work: space("Work").id };
+                return { shown, escaped, fromButton, result, workCtx: space("Work").userContextId, work: space("Work").id };
                 """
             )
             if r.get("skipped"):
                 return "BrowserCommands.openTab not present; skipped"
-            assert r["ctx"] == r["workCtx"] and r["sp"] == r["work"], r
-            return "Ctrl+T opens in the Space's container"
+            shown, escaped, res = r["shown"], r["escaped"], r["result"]
+            assert not shown["hidden"] and shown["mode"] == "launcher" and shown["opened"] == 0, r
+            assert shown["focused"] or not shown["windowFocused"], f"the search box should have focus: {r}"
+            assert escaped["mode"] != "launcher" and escaped["opened"] == 0, r
+            assert r["fromButton"]["mode"] == "launcher", f"the + button should open the search box: {r}"
+            assert res["ctx"] == r["workCtx"] and res["sp"] == r["work"], f"not in Work's container: {r}"
+            assert res["first"] and res["selected"] and res["boxHidden"], f"new tab should be first and selected: {r}"
+            rows = self.js(
+                """
+                gB.selectedTab = tabByTitle("Page C") ?? gB.selectedTab;
+                await sleep(100);
+                w.BrowserCommands.openTab();
+                await sleep(100);
+                let input = w.document.getElementById("evergreen-search-input");
+                input.value = "page";
+                input.dispatchEvent(new w.Event("input", { bubbles: true }));
+                await until(() => w.document.querySelector('.evergreen-search-result[data-kind="page"]'), 3000)
+                  .catch(() => null);
+                return [...w.document.querySelectorAll(".evergreen-search-result")]
+                  .map(row => row.dataset.kind + ": " + row.textContent);
+                """
+            )
+            self.shot("search-box")
+            assert any(row.startswith("page:") and "Page" in row for row in rows), (
+                f"typing should suggest visited pages: {rows}"
+            )
+            self.js(
+                """
+                let input = w.document.getElementById("evergreen-search-input");
+                input.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+                """
+            )
+            plus = "the + button too" if r["fromButton"]["plus"] else "+ button not shown"
+            return f"Ctrl+T ({plus}) shows the search box and suggests visited pages; Enter opens a tab at the top, in the Space's container"
+
+        def new_tab_at_top():
+            r = self.js(
+                """
+                let opened = nextTabOpen();
+                w.openTrustedLinkIn("about:robots", "tab");
+                let t = await opened;
+                await sleep(100);
+                let unpinned = gB.visibleTabs.filter(x => !x.pinned);
+                let first = unpinned[0] == t, count = unpinned.length;
+                gB.removeTab(t);
+                return { first, count, tabs: tabList() };
+                """
+            )
+            assert r["first"], f"a new tab should open at the top: {r}"
+            return f"first of {r['count']}"
+
+        def start_page():
+            r = self.js(
+                """
+                let d = w.document;
+                let box = d.getElementById("evergreen-search");
+                let input = d.getElementById("evergreen-search-input");
+                let tab = gB.addTrustedTab("about:home");
+                gB.selectedTab = tab;
+                await until(() => tab.linkedBrowser.currentURI.spec == "about:home" && !box.hidden);
+                await until(() => input.placeholder);
+                let rect = el => el.getBoundingClientRect();
+                let page = rect(d.getElementById("tabbrowser-tabbox")), cover = rect(box);
+                let shown = { mode: box.getAttribute("mode"), solid: box.hasAttribute("solid"),
+                  title: d.querySelector(".evergreen-search-title").textContent, placeholder: input.placeholder,
+                  covers: Math.abs(page.left - cover.left) < 1 && Math.abs(page.width - cover.width) < 1
+                    && Math.abs(page.height - cover.height) < 1,
+                  background: w.getComputedStyle(box).backgroundColor };
+                
+                // Typed words search with the default engine.
+                let { resolveInput } = ChromeUtils.importESModule("@BASE@EvergreenSearch.sys.mjs");
+                let { getSearchService } = ChromeUtils.importESModule("@BASE@EvergreenStartup.sys.mjs");
+                let engine = (await getSearchService().service.getDefault()).name;
+                let search = resolveInput("evergreen trees");
+                // Enter loads in this tab, and the page goes.
+                input.value = "about:robots";
+                input.dispatchEvent(new w.Event("input", { bubbles: true }));
+                input.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+                await until(() => tab.linkedBrowser.currentURI.spec == "about:robots");
+                await sleep(100);
+                let after = { hidden: box.hidden, sameTab: gB.selectedTab == tab };
+                // Back to the start page: it shows again.
+                tab.linkedBrowser.loadURI(Services.io.newURI("about:home"),
+                  { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() });
+                await until(() => tab.linkedBrowser.currentURI.spec == "about:home");
+                await sleep(100);
+                let again = !box.hidden && box.getAttribute("mode") == "start";
+                return { shown, engine, search, after, again, tabId: gB.tabs.indexOf(tab) };
+                """
+            )
+            shown = r["shown"]
+            assert shown["mode"] == "start" and shown["solid"] and shown["covers"], r
+            assert shown["title"] == "Evergreen", r
+            assert r["engine"] in shown["placeholder"], f"the box should name the default engine: {r}"
+            assert r["search"] and r["search"]["search"], f"words should search: {r}"
+            assert r["after"]["hidden"] and r["after"]["sameTab"], r
+            assert r["again"], r
+            self.shot("start-page")
+            self.js("gB.removeTab(gB.tabs[arguments[0]]);", r["tabId"])
+            return f"searches with {r['engine']}: {r['search']['url'][:40]}…"
 
         def switching():
             r = self.js(
@@ -581,6 +706,8 @@ class Run:
                   tabs: gB.tabs.filter(t => !t.pinned).map(t => [t.label, t.getAttribute("evergreen-space")]).sort() };
                 """
             )
+            # The console starts empty after a restart; keep what it had.
+            self.errors_before_restart += self.js("return evergreenConsoleErrors();")
             self.quit()
             self.launch()
             after = self.js(
@@ -725,8 +852,10 @@ class Run:
                   width: rect(container).width, pageWidth: rect(tabbox).width };
                 // ...and it slides away when the mouse leaves.
                 container.dispatchEvent(new w.MouseEvent("mouseleave"));
-                await sleep(800);
-                let left = { peek: root.hasAttribute("evergreen-sidebar-peek"), sidebarRight: rect(container).right };
+                await sleep(100);
+                let left = { peek: root.hasAttribute("evergreen-sidebar-peek") };
+                await sleep(250);
+                left.sidebarRight = rect(container).right;
                 w.SidebarController.handleToolbarButtonClick();
                 await sleep(400);
                 let expanded = { attr: root.hasAttribute("evergreen-sidebar-collapsed"), sidebarLeft: rect(container).left,
@@ -741,7 +870,8 @@ class Run:
             assert col["backAfterDownloads"] < 16 and not col["button"], f"nav should follow Downloads: {r}"
             assert peek["attr"] and abs(peek["left"]) < 1 and peek["width"] > 100, r
             assert peek["pageWidth"] == col["pageWidth"], f"the page must not resize while revealed: {r}"
-            assert not left["peek"] and left["sidebarRight"] <= 0, r
+            assert not left["peek"], f"the sidebar should start hiding within 0.1 s of the mouse leaving: {r}"
+            assert left["sidebarRight"] <= 0, f"the sidebar should be gone within 0.35 s: {r}"
             assert not exp["attr"] and exp["sidebarLeft"] == 0 and abs(exp["back"] - exp["page"]) <= 2, r
             assert exp["button"] and exp["pref"] is False, r
             return "collapses fully; the left edge slides it over the page"
@@ -795,7 +925,7 @@ class Run:
             return "click, type, Enter; Escape cancels"
 
         def console_errors():
-            r = self.js("return evergreenConsoleErrors();")
+            r = self.errors_before_restart + self.js("return evergreenConsoleErrors();")
             assert not r, "\n  " + "\n  ".join(r)
 
         self.check("Evergreen loads into the window", loads)
@@ -804,7 +934,9 @@ class Run:
         self.check("first run: ETP Strict and Ecosia", first_run)
         self.check("first run: offer to import from another browser", import_offer)
         self.check("Spaces with separate sign-ins (containers)", spaces_and_containers)
-        self.check("new-tab command uses the Space's container", new_tab_command)
+        self.check("new-tab command opens the search box", new_tab_command)
+        self.check("new tabs open at the top", new_tab_at_top)
+        self.check("start page: Evergreen and a search box", start_page)
         self.check("switching Spaces hides/shows tabs", switching)
         self.check("keyboard shortcut switches Space", keyboard_shortcut)
         self.check("moving a tab across sign-in identities", move_tab)

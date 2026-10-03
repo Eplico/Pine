@@ -245,7 +245,8 @@
     background-color: var(--toolbox-background-color, var(--toolbox-bgcolor, -moz-dialog));
     background-image: linear-gradient(170deg, var(--evergreen-tint-strong), var(--evergreen-tint-weak));
     transform: translateX(calc(-100% - 24px));
-    transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    /* Sliding away: quick. */
+    transition: transform 110ms ease-in;
 
     &:-moz-locale-dir(rtl) {
       transform: translateX(calc(100% + 24px));
@@ -260,6 +261,8 @@
 
 :root[evergreen-sidebar-collapsed][evergreen-sidebar-peek] :is(#sidebar-container, box#sidebar-main) {
   transform: none;
+  /* Sliding in: a little softer. */
+  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
   border-start-end-radius: 10px;
   border-end-end-radius: 10px;
   box-shadow:
@@ -284,14 +287,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   :root[evergreen-sidebar-collapsed] :is(#sidebar-container, box#sidebar-main),
-  /* Some Firefox versions also give the address bar's container a fixed minimum
- * height; keep it in step with the sizes above. */
-:root[evergreen]:not([evergreen-natural-sizes]) #urlbar-container {
-  min-height: calc(var(--urlbar-height) + 2 * var(--urlbar-container-padding-block));
-}
-
-#nav-bar[evergreen-aligned] #nav-bar-customization-target > * {
-    transition: none;
+  #nav-bar[evergreen-aligned] #nav-bar-customization-target > * {
+    transition: none !important;
   }
 }
 
@@ -323,6 +320,129 @@
  * strip that reveals the sidebar sits). */
 :root[evergreen][evergreen-sidebar-collapsed]:not([inDOMFullscreen], [sizemode="fullscreen"]) #tabbrowser-tabbox {
   margin-inline-start: 8px;
+}
+
+/* --- Start page and new-tab search (EvergreenSearch) ---------------------------
+ * Drawn by the browser over the page area: a solid start page tinted with the
+ * Space's colour, or (Ctrl+T over a page) a floating box over a dimmed page. */
+
+:root[evergreen] #tabbrowser-tabbox {
+  position: relative;
+}
+
+#evergreen-search {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px 14vh;
+  color: CanvasText;
+  background-color: color-mix(in srgb, var(--evergreen-space-color) 10%, Canvas);
+
+  &[hidden] {
+    display: none;
+  }
+
+  &[mode="launcher"]:not([solid]) {
+    justify-content: flex-start;
+    padding-top: 14vh;
+    background-color: rgb(0 0 0 / 0.3);
+
+    & .evergreen-search-title {
+      display: none;
+    }
+  }
+}
+
+.evergreen-search-box {
+  display: flex;
+  flex-direction: column;
+  width: min(620px, 100%);
+}
+
+.evergreen-search-title {
+  margin: 0 0 22px;
+  text-align: center;
+  font-size: 44px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: color-mix(in srgb, var(--evergreen-space-color) 70%, CanvasText);
+}
+
+#evergreen-search-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 50px;
+  margin: 0;
+  padding: 0 20px;
+  font: inherit;
+  font-size: 17px;
+  color: FieldText;
+  background-color: Field;
+  border: 1px solid color-mix(in srgb, CanvasText 14%, transparent);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.14);
+  outline: none;
+
+  &:focus-visible {
+    border-color: var(--evergreen-space-color);
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--evergreen-space-color) 30%, transparent),
+      0 10px 30px rgb(0 0 0 / 0.14);
+  }
+}
+
+#evergreen-search-results {
+  margin: 8px 0 0;
+  padding: 6px;
+  list-style: none;
+  color: FieldText;
+  background-color: Field;
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.14);
+
+  &:empty {
+    display: none;
+  }
+}
+
+.evergreen-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 12px;
+  border-radius: 9px;
+
+  &:hover {
+    background-color: var(--evergreen-hover);
+  }
+
+  &[selected] {
+    background-color: var(--evergreen-tint-strong);
+  }
+}
+
+.evergreen-search-label,
+.evergreen-search-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evergreen-search-label {
+  font-size: 14px;
+}
+
+.evergreen-search-detail {
+  font-size: 12px;
+  opacity: 0.7;
+
+  &:empty {
+    display: none;
+  }
 }
 
 /* --- Panels ---------------------------------------------------------------------- */

@@ -21,7 +21,8 @@
 
 const COLLAPSED_PREF = "evergreen.sidebar.collapsed"; // last choice, for new windows
 const WINDOW_COLLAPSED = "evergreen-sidebar-collapsed"; // SessionStore window value
-const PEEK_HIDE_DELAY_MS = 300;
+// Just long enough to forgive a mouse that grazes the edge on its way past.
+const PEEK_HIDE_DELAY_MS = 40;
 
 /**
  * The toolbar order, applied once per profile (EvergreenStartup): the sidebar

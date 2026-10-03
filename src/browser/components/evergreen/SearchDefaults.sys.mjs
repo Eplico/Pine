@@ -105,3 +105,22 @@ export async function reconcileDefaultSearch(search, changeReason, managed) {
   managed.set(engine.id);
   return true;
 }
+
+/**
+ * The search service and its "unknown" change reason. Recent Firefox
+ * releases (156 and 157 at least) replaced the XPCOM service
+ * (Services.search) with an ES module; support both so the dev harness also
+ * runs on older installed Firefox versions.
+ */
+export function getSearchService() {
+  if (Services.search) {
+    return {
+      service: Services.search,
+      changeReason: Ci.nsISearchService.CHANGE_REASON_UNKNOWN,
+    };
+  }
+  let { SearchService } = ChromeUtils.importESModule(
+    "moz-src:///toolkit/components/search/SearchService.sys.mjs"
+  );
+  return { service: SearchService, changeReason: SearchService.CHANGE_REASON.UNKNOWN };
+}
