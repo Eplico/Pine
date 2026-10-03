@@ -194,6 +194,14 @@ jobs:
           Get-ChildItem C:\eg\pkg\evergreen\distribution\extensions -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
           python tests/smoke/smoke_test.py --binary $exe.FullName --headless --screenshots C:\eg\dev\screenshots
 
+      # Opens the installer and checks its windows (Evergreen's name and
+      # image, not Firefox's); installs nothing.
+      - name: Check the installer
+        run: |
+          $setup = Get-ChildItem release\*-setup.exe | Select-Object -First 1
+          if (-not $setup) { throw "No installer among the packages" }
+          ./tests/installer/check_installer.ps1 -Setup $setup.FullName -OutDir C:\eg\dev\installer-ui
+
       - name: Upload smoke-test diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -202,6 +210,7 @@ jobs:
           path: |
             C:\eg\dev\screenshots\
             C:\eg\dev\smoke-firefox.log
+            C:\eg\dev\installer-ui\
           if-no-files-found: ignore
 
       - name: Publish GitHub release
