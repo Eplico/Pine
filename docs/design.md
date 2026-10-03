@@ -237,9 +237,12 @@ documented patch.
 - **Upstream what we can.** If a hook is useful beyond Evergreen, file it
   upstream and record the bug number.
 - **Budget: ≤ 30 patches and ≤ 2,000 changed upstream lines at v1.0.**
-  `eg.py status` and `eg.py lint` report it. **Current: 3 patches, 6 lines**
+  `eg.py status` and `eg.py lint` report it. **Current: 4 patches, 8 lines**
   (registering Evergreen's component; packaging the bundled extensions;
-  building the installer from the branded self-extractor stub).
+  building the installer from the branded self-extractor stub; titling the
+  self-extractor "Evergreen"). `eg.py prepare` brands that stub: Evergreen's
+  icon, and "Evergreen" as its description and product name in the version
+  information Windows shows (`tools/eg/sfxstub.py`).
 
 ### 5.4 Tracking upstream
 
@@ -332,10 +335,11 @@ already has (`gBrowser`, `SessionStore`, `ContextualIdentityService`,
 - **Hiding the sidebar.** The sidebar button (or `Ctrl+Alt+Z`) hides the
   sidebar completely and the page takes the full width. Moving the mouse to
   the left edge of the window slides the sidebar in *over* the page, which
-  does not resize, and it slides away when the mouse leaves. It stays while a
-  menu or panel opened from it is open, while something is dragged, or while
-  a Space is being renamed. The choice is remembered per window and for new
-  windows. Evergreen keeps Firefox's launcher expanded and moves it out of
+  does not resize, and it slides away as soon as the mouse leaves (after
+  40 ms, so a mouse grazing the edge does not make it flicker). It stays
+  while a menu or panel opened from it is open, while something is dragged,
+  or while a Space is being renamed. The choice is remembered per window and
+  for new windows. Evergreen keeps Firefox's launcher expanded and moves it out of
   the layout, so Firefox still runs the tabs, tools and resizing.
 
 The navigation toolbar stays at the top, which satisfies principle 4
@@ -370,7 +374,8 @@ tool only and is never part of a build.
 | Pinned tabs and folders | "Keep in Space" now; folders later | Tab values; native tab groups | **Prototype** (keep) / planned |
 | Today tabs + auto-archive | Archive | New (Evergreen) | **Prototype** |
 | Split View (up to 4) | Split view (2 panes) | Native split view (149+) | Planned |
-| Command Bar | Command bar | Firefox address bar providers | Planned |
+| New tab (Command Bar) | New-tab search box | Evergreen overlay; Firefox's address parsing and default engine | **Prototype** (search, addresses, history); commands planned |
+| Empty start page | Start page | Evergreen overlay over Firefox's home and new-tab pages | **Prototype** |
 | Peek | Peek | Normal tab shown in an overlay | Planned |
 | Little Arc | Mini window | Compact window for external links | Planned |
 | Air Traffic Control | Link routing | New (Evergreen) | Planned |
@@ -424,7 +429,8 @@ dots, `Ctrl+Shift+1…9`, or by selecting a tab that belongs to another Space
 - History, bookmarks, extensions and settings are **shared**; the editor says
   so plainly.
 - New tabs (`Ctrl+T`, the + button, bookmarks opened in a new tab) open in
-  the active Space's container. In the prototype this wraps the window's
+  the active Space's container, at the top of its tab list (as in Arc).
+  Links opened from a page stay next to it. In the prototype this wraps the window's
   `openTrustedLinkIn`; a real build will turn it into a small hook patch.
   Links opened from a page inherit that page's container, as in Firefox.
 - A container is fixed when a tab is created, so **moving** a tab to a Space
@@ -466,11 +472,34 @@ Evergreen will use **Firefox's native split view** (149+) unchanged and show a
 split pair as one row in the sidebar. More than two panes should be built
 upstream first.
 
-### 7.5 Command bar
+### 7.5 New tab and command bar
 
-`Ctrl+T` will open a centred, floating instance of the **Firefox address bar**
-rather than a new search UI, with providers added for switching Space, moving
-a tab to a Space, searching the Archive and Evergreen commands.
+**Since 0.1**, `Ctrl+T`, the + button and the other new-tab commands open a
+**search box over the current page** instead of a blank tab, as in Arc.
+Typing an address and pressing Enter opens it in a new tab at the top of the
+Space; anything else searches with the default search engine. Firefox's own
+address parsing decides which (the same code the address bar uses), so the
+box follows whichever engine the user picks in Settings, including the
+private-browsing one. Below the box are matching pages from history and
+bookmarks. Escape, or a click outside the box, closes it without opening a
+tab. (`EvergreenSearch.sys.mjs` replaces `BrowserCommands.openTab` when it
+is called without an address.)
+
+Later, the box will grow into a **command bar**: switching Space, moving a
+tab to a Space, searching the Archive and Evergreen commands. Whether to
+build that on a floating instance of the Firefox address bar (its providers
+and keyboard handling) is still open.
+
+**Start page.** A tab showing Firefox's home or new-tab page (`about:home`,
+`about:newtab`) is covered by a solid page in the Space's colour with
+"Evergreen" above a centred search box; Enter loads the result in that tab.
+The page underneath is never shown.
+
+**Trust.** The start page and the box are drawn by the browser over the page
+area. A site could imitate them, as it could imitate any new-tab page; the
+address bar stays the reliable indicator (it is empty on the real start
+page). Typed text, page titles and addresses are only ever written as text,
+and only http(s), file and about: addresses are opened from the box.
 
 ### 7.6 Peek
 
@@ -644,10 +673,13 @@ flowchart LR
   `mozconfigs/ci.mozconfig` in CI (no test programs, no debug symbols, and
   sccache to speed up rebuilds). `--enable-bootstrap` downloads Mozilla's
   toolchains, so no Visual Studio install is needed.
-- **Versions.** Evergreen `157.0-12` is Firefox 157.0 plus Evergreen build 12;
-  the release tag is `v157.0-12`. The build number is the workflow run
-  number, the number given when starting the workflow, or the one in a
-  pushed tag.
+- **Versions.** Evergreen has its own version, in the `VERSION` file; 0.1
+  is the first. Each release is built on the Firefox release pinned in
+  `upstream.json`, and its notes say which. The release tag is `v<version>`
+  (e.g. `v0.1`), files are named `Evergreen-<version>-win64-…`, and a
+  version is published once: bump `VERSION` for the next release. The
+  browser itself keeps Firefox's version number (sites and extensions rely
+  on it).
 
 ### 9.2 Signing and keys
 
@@ -691,10 +723,10 @@ builder. Until then, each release records the toolchain and source hashes.
 | Suite | What it checks | Command |
 |---|---|---|
 | Lint | ESLint incl. `no-unsanitized` on all privileged code | `npm run lint` |
-| UI unit tests | Spaces model, archive policy, search defaults (24 tests) | `npm test` |
-| Tooling tests | Prefs parser, patch lint, real GPG verification with pinned keys, full prepare pipeline on a fake tarball, dev harness (21 tests) | `python -m unittest discover -s tests/python` |
+| UI unit tests | Spaces model, archive policy, search defaults, new-tab search box (36 tests) | `npm test` |
+| Tooling tests | Prefs parser, patch lint, real GPG verification with pinned keys, full prepare pipeline on a fake tarball, dev harness, release naming, installer stub branding (35 tests) | `python -m unittest discover -s tests/python` |
 | Patch / pref checks | Patches apply and prefs exist in the pinned Firefox | `eg.py check-patches`, `eg.py check-prefs` |
-| **Smoke test** | Evergreen running in a real Firefox (CI: the pinned release on Linux, the runner's Firefox on Windows; the release workflow: the built `evergreen.exe`): prefs applied, first run (ETP Strict, Ecosia, the import offer), Spaces and containers, Ctrl+T container, switching, keyboard shortcut, moving tabs across identities, auto-archive, Archive panel, history clearing, editor, restart persistence (Spaces and the search default), deleting Spaces, private windows, toolbar order and alignment, toolbar and sidebar sizes against Firefox's own, hiding and revealing the sidebar, renaming a Space, no console errors (23 checks) | `python tests/smoke/smoke_test.py` |
+| **Smoke test** | Evergreen running in a real Firefox (CI: the pinned release on Linux, the runner's Firefox on Windows; the release workflow: the built `evergreen.exe`): prefs applied, first run (ETP Strict, Ecosia, the import offer), Spaces and containers, the new-tab search box (Ctrl+T and the + button; container, tab at the top, history suggestions), new tabs at the top, the start page, switching, keyboard shortcut, moving tabs across identities, auto-archive, Archive panel, history clearing, editor, restart persistence (Spaces and the search default), deleting Spaces, private windows, toolbar order and alignment, toolbar and sidebar sizes against Firefox's own, hiding and revealing the sidebar (and how quickly it slides away), renaming a Space, no console errors (25 checks) | `python tests/smoke/smoke_test.py` |
 | Prefs audit *(M0)* | Starts the *packaged* build and checks every default and build protection | — |
 | Network egress test *(M0)* | Scripted session through a logging proxy; fails on any host outside the allowlist | — |
 | Update test *(M3)* | Old → new release through a signed MAR; tampered MAR rejected | — |

@@ -20,15 +20,10 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from .config import APP_NAME, EgError, Upstream
+from .config import APP_NAME, EgError
 from .mach import OBJDIR_NAME
 
 PLATFORM_SUFFIX = {"windows": "win64", "linux": "linux-x86_64", "macos": "mac"}
-
-
-def release_version(up: Upstream, build: str) -> str:
-    """Evergreen version: Firefox version plus Evergreen build number."""
-    return f"{up.version}-{build}"
 
 
 def _sha256(path: Path) -> str:
@@ -93,13 +88,13 @@ def check_archive(archive: Path, platform: str) -> None:
         )
 
 
-def collect(tree: Path, up: Upstream, platform: str, build: str, out: Path) -> list[Path]:
+def collect(tree: Path, version: str, platform: str, out: Path) -> list[Path]:
+    """Copy the packages to out/ as Evergreen-<version>-<platform>-portable/-setup files."""
     packages = find_packages(tree)
     if "archive" not in packages:
         raise EgError(f"No packaged build in {tree / OBJDIR_NAME / 'dist'}; run `eg.py package`.")
     print(f"  package: {packages['archive']}")
     check_archive(packages["archive"], platform)
-    version = release_version(up, build)
     suffix = PLATFORM_SUFFIX[platform]
     out.mkdir(parents=True, exist_ok=True)
     written = []

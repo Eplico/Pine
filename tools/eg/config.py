@@ -2,18 +2,20 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-"""Repository paths, the upstream pin, and host detection."""
+"""Repository paths, the upstream pin, Evergreen's version, and host detection."""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 UPSTREAM_JSON = REPO / "upstream.json"
+VERSION_FILE = REPO / "VERSION"
 PATCHES_DIR = REPO / "patches"
 SRC_DIR = REPO / "src"
 BRANDING_DIR = REPO / "branding" / "evergreen"
@@ -93,6 +95,17 @@ def save_upstream_sha512(sha512: str, path: Path = UPSTREAM_JSON) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
     data["firefox"]["sha512"] = sha512
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+VERSION_RE = re.compile(r"^\d+\.\d+(?:\.\d+)?$")
+
+
+def load_version(path: Path = VERSION_FILE) -> str:
+    """Evergreen's own version (e.g. 0.1), from the VERSION file."""
+    version = path.read_text(encoding="utf-8").strip()
+    if not VERSION_RE.match(version):
+        raise EgError(f"{path.name} must hold a version like 0.1 or 0.1.2, not {version!r}")
+    return version
 
 
 def work_dir() -> Path:

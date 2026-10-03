@@ -10,6 +10,8 @@ installing anything.
 .DESCRIPTION
 Runs the installer .exe, waits for its welcome page and saves a screenshot.
 Checks that:
+  - the .exe's description and product name (file Properties, Task Manager)
+    are Evergreen's;
   - no window it opens is titled with Firefox's name (the self-extractor shows
     a progress window while it unpacks);
   - the welcome page's left panel shows Evergreen's image (mostly green), not
@@ -107,6 +109,11 @@ if ($Scale) {
 [EgWin]::SetThreadDpiAwarenessContext([IntPtr]::new(-4)) | Out-Null  # per-monitor v2
 
 $failures = [System.Collections.Generic.List[string]]::new()
+$info = (Get-Item $Setup).VersionInfo
+"File description '$($info.FileDescription)', product '$($info.ProductName)' $($info.ProductVersion)"
+if ("$($info.FileDescription) $($info.ProductName)" -match 'Firefox|Mozilla') {
+  $failures.Add("the installer's version information names Firefox")
+}
 $titles = [System.Collections.Generic.HashSet[string]]::new()
 $stub = Start-Process -FilePath (Resolve-Path $Setup).Path -PassThru
 

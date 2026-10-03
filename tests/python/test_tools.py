@@ -255,6 +255,7 @@ class PrepareTest(unittest.TestCase):
             "browser/components/moz.build": (FIXTURES / "browser-components-moz.build").read_text(),
             "browser/installer/package-manifest.in": (FIXTURES / "browser-installer-package-manifest.in").read_text(),
             "browser/installer/windows/Makefile.in": (FIXTURES / "browser-installer-windows-Makefile.in").read_text(),
+            "browser/installer/windows/app.tag": (FIXTURES / "browser-installer-windows-app.tag").read_text(),
             "browser/branding/unofficial/configure.sh": "MOZ_APP_DISPLAYNAME=Nightly\n",
             "browser/branding/unofficial/locales/en-US/brand.ftl": "-brand-short-name = Nightly\n",
             "browser/branding/unofficial/firefox.ico": "upstream icon",
@@ -263,6 +264,7 @@ class PrepareTest(unittest.TestCase):
         self.stub = make_pe(
             {1: b"\1" * 1320, 2: b"\2" * 5160, 3: b"\3" * 11560, 4: b"\4" * 43467},
             [(16, 1), (32, 2), (48, 3), (256, 4)],
+            version=(FIXTURES / "7zSD-version-info.bin").read_bytes(),
         )
         files = {name: text.encode() for name, text in files.items()}
         files["other-licenses/7zstub/firefox/7zSD.Win32.sfx"] = self.stub
@@ -279,9 +281,12 @@ class PrepareTest(unittest.TestCase):
                         .endswith("@RESPATH@/distribution/extensions/*\n"))
         self.assertIn("SFX_MODULE = $(topsrcdir)/$(MOZ_BRANDING_DIRECTORY)/7zSD.Win32.sfx",
                       (tree / "browser/installer/windows/Makefile.in").read_text())
+        self.assertIn('Title="Evergreen"', (tree / "browser/installer/windows/app.tag").read_text())
         branded = (tree / "browser/branding/evergreen/7zSD.Win32.sfx").read_bytes()
         self.assertEqual(len(branded), len(self.stub))
         self.assertNotEqual(branded, self.stub)
+        strings = version_strings(branded)
+        self.assertEqual((strings["FileDescription"], strings["ProductVersion"]), ("Evergreen", config.load_version()))
         self.assertTrue((tree / "browser/branding/evergreen/wizWatermark.bmp").exists())
         comp = tree / "browser/components/evergreen"
         self.assertTrue((comp / "EvergreenWindow.sys.mjs").exists())
@@ -409,11 +414,13 @@ class MirrorTest(unittest.TestCase):
         self.assertEqual(checks._retry_delay(self.http_error(503), 9), 60)
 
 
-def make_pe(icons: dict[int, bytes], group: list[tuple[int, int]]) -> bytes:
-    """A minimal PE32 file whose only section holds icon resources.
+def make_pe(icons: dict[int, bytes], group: list[tuple[int, int]], version: bytes | None = None,
+            after_version: bytes = b"") -> bytes:
+    """A minimal PE32 file whose only section holds resources.
 
     icons: resource id -> image bytes; group: (width, icon id) entries of the
-    one icon group.
+    one icon group; version: a VS_VERSIONINFO block, followed in the file by
+    `after_version` (unreferenced bytes) and a last resource.
     """
     rva, raw = 0x1000, 0x200
 
@@ -423,38 +430,42 @@ def make_pe(icons: dict[int, bytes], group: list[tuple[int, int]]) -> bytes:
             out += struct.pack("<II", rid, off | (0x80000000 if sub else 0))
         return out
 
-    blobs = dict(icons)
     grp = struct.pack("<HHH", 0, 1, len(group)) + b"".join(
         struct.pack("<BBBBHHIH", w % 256, w % 256, 0, 0, 1, 32, len(icons[i]), i) for w, i in group
     )
-    leaves = [(3, i) for i in sorted(icons)] + [(14, 1)]
-    # Layout: root, two type directories, one language directory per leaf,
-    # data entries, then the data.
-    root_size = 16 + 2 * 8
-    type_sizes = {3: 16 + 8 * len(icons), 14: 16 + 8}
-    type_off = {3: root_size, 14: root_size + type_sizes[3]}
-    lang_off, off = {}, root_size + type_sizes[3] + type_sizes[14]
+    resources = {3: dict(icons), 14: {1: grp}}
+    if version is not None:
+        resources[16] = {1: version}
+        resources[24] = {1: b"<manifest/>"}
+    leaves = [(t, i) for t in sorted(resources) for i in sorted(resources[t])]
+    # Layout: root, a directory per type, one language directory per leaf,
+    # data entries, then the data (in leaf order).
+    off = 16 + 8 * len(resources)
+    type_off = {}
+    for t in sorted(resources):
+        type_off[t] = off
+        off += 16 + 8 * len(resources[t])
+    lang_off, entry_off, data_off = {}, {}, {}
     for leaf in leaves:
         lang_off[leaf] = off
         off += 16 + 8
-    entry_off = {}
     for leaf in leaves:
         entry_off[leaf] = off
         off += 16
-    data_off = {}
+    blobs = b""
     for leaf in leaves:
-        data_off[leaf] = off
-        off += len(blobs[leaf[1]] if leaf[0] == 3 else grp)
-    rsrc = directory([(3, type_off[3], True), (14, type_off[14], True)])
-    rsrc += directory([(i, lang_off[(3, i)], True) for i in sorted(icons)])
-    rsrc += directory([(1, lang_off[(14, 1)], True)])
+        data_off[leaf] = off + len(blobs)
+        blobs += resources[leaf[0]][leaf[1]]
+        if leaf == (16, 1):
+            blobs += after_version
+    rsrc = directory([(t, type_off[t], True) for t in sorted(resources)])
+    for t in sorted(resources):
+        rsrc += directory([(i, lang_off[(t, i)], True) for i in sorted(resources[t])])
     for leaf in leaves:
         rsrc += directory([(1033, entry_off[leaf], False)])
     for leaf in leaves:
-        size = len(blobs[leaf[1]] if leaf[0] == 3 else grp)
-        rsrc += struct.pack("<IIII", rva + data_off[leaf], size, 0, 0)
-    for leaf in leaves:
-        rsrc += blobs[leaf[1]] if leaf[0] == 3 else grp
+        rsrc += struct.pack("<IIII", rva + data_off[leaf], len(resources[leaf[0]][leaf[1]]), 0, 0)
+    rsrc += blobs
 
     pe_off = 0x40
     head = bytearray(raw)
@@ -469,6 +480,16 @@ def make_pe(icons: dict[int, bytes], group: list[tuple[int, int]]) -> bytes:
     head[table:table + 8] = b".rsrc\0\0\0"
     struct.pack_into("<IIII", head, table + 8, len(rsrc), rva, len(rsrc), raw)
     return bytes(head) + rsrc
+
+
+def version_strings(exe: bytes) -> dict[str, str]:
+    """The StringFileInfo values of an executable's version information."""
+    pe = sfxstub._Pe(bytearray(exe))
+    (_, entry), = pe.resources(sfxstub.RT_VERSION)
+    rva, size = struct.unpack_from("<II", exe, entry)
+    root = sfxstub.parse_version_info(exe[pe.offset(rva):pe.offset(rva) + size])
+    (strings,), = [info[3] for info in root[3] if info[0] == "StringFileInfo"]
+    return {e[0]: e[2].decode("utf-16-le").rstrip("\0") for e in strings[3]}
 
 
 def make_ico(images: dict[int, bytes]) -> bytes:
@@ -504,6 +525,37 @@ class SfxStubTest(unittest.TestCase):
             sfxstub.replace_icons(stub, make_ico({32: b"x"}))
         with self.assertRaisesRegex(EgError, "not a Windows executable"):
             sfxstub.replace_icons(b"nope" * 100, make_ico({16: b"x"}))
+
+    def test_reads_the_stubs_version_information(self):
+        # Mozilla's 7-Zip stub counts string lengths in bytes, not UTF-16 units.
+        blob = (FIXTURES / "7zSD-version-info.bin").read_bytes()
+        root = sfxstub.parse_version_info(blob)
+        self.assertEqual(sfxstub.parse_version_info(sfxstub.build_version_info(root)), root)
+        stub = make_pe({1: b"A" * 40}, [(16, 1)], version=blob)
+        self.assertEqual(version_strings(stub)["FileDescription"], "Firefox")
+        self.assertEqual(version_strings(stub)["ProductVersion"], "18.05")
+
+    def test_replaces_version_strings_in_place(self):
+        blob = (FIXTURES / "7zSD-version-info.bin").read_bytes()
+        # As in the real stub, the bytes after the block are not free.
+        stub = make_pe({1: b"A" * 40}, [(16, 1)], version=blob, after_version=b"\0\x28\x03\0")
+        strings = dict(prepare.STUB_VERSION_STRINGS, ProductVersion="0.1")
+        out = sfxstub.replace_version_strings(stub, strings, optional=("ProductVersion",))
+        self.assertEqual(len(out), len(stub))
+        got = version_strings(out)
+        self.assertEqual((got["FileDescription"], got["ProductName"], got["ProductVersion"]),
+                         ("Evergreen", "Evergreen", "0.1"))
+        self.assertEqual(got["LegalCopyright"], "Mozilla")  # the stub's own, kept
+        self.assertEqual(out[-len(b"<manifest/>"):], b"<manifest/>")
+        # A version too long to fit leaves the product version blank...
+        out = sfxstub.replace_version_strings(stub, dict(strings, ProductVersion="10.10.10"),
+                                              optional=("ProductVersion",))
+        self.assertEqual(version_strings(out)["ProductVersion"], "")
+        # ...and required strings that cannot fit are an error.
+        with self.assertRaisesRegex(EgError, "room for 628"):
+            sfxstub.replace_version_strings(stub, {"FileDescription": "Evergreen, a browser" * 2})
+        with self.assertRaisesRegex(EgError, "no version information"):
+            sfxstub.replace_version_strings(make_pe({1: b"A"}, [(16, 1)]), strings)
 
     def test_repo_icon_fits_its_own_formats(self):
         images = sfxstub.read_ico((config.BRANDING_DIR / "source" / "installer-stub.ico").read_bytes())
@@ -544,22 +596,37 @@ class ReleaseTest(unittest.TestCase):
             self.make_dist(Path(tmp))
             out = Path(tmp) / "release"
             with contextlib.redirect_stdout(io.StringIO()):
-                written = release.collect(Path(tmp) / "tree", make_upstream(), "windows", "7", out)
+                written = release.collect(Path(tmp) / "tree", "0.1", "windows", out)
             self.assertEqual(
                 [p.name for p in written],
-                ["Evergreen-157.0-7-win64-portable.zip", "Evergreen-157.0-7-win64-setup.exe", "SHA256SUMS.txt"],
+                ["Evergreen-0.1-win64-portable.zip", "Evergreen-0.1-win64-setup.exe", "SHA256SUMS.txt"],
             )
             sums = (out / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(sums), 2)
-            self.assertTrue(sums[1].endswith("  Evergreen-157.0-7-win64-setup.exe"))
+            self.assertTrue(sums[1].endswith("  Evergreen-0.1-win64-setup.exe"))
 
     def test_collect_rejects_wrong_layout(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.make_dist(Path(tmp), members=("firefox/firefox.exe",))
             with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(EgError, "top level: firefox"):
-                release.collect(Path(tmp) / "tree", make_upstream(), "windows", "1", Path(tmp) / "release")
+                release.collect(Path(tmp) / "tree", "0.1", "windows", Path(tmp) / "release")
             self.assertFalse((Path(tmp) / "release").exists())
 
+
+
+class VersionTest(unittest.TestCase):
+    def test_repository_version(self):
+        self.assertRegex(config.load_version(), r"^\d+\.\d+(\.\d+)?$")
+
+    def test_rejects_other_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for text in ("v0.1", "157.0-3", "", "0.1 beta"):
+                path = Path(tmp) / "VERSION"
+                path.write_text(text + "\n", encoding="utf-8")
+                with self.assertRaises(EgError):
+                    config.load_version(path)
+            path.write_text("0.1.2\n", encoding="utf-8")
+            self.assertEqual(config.load_version(path), "0.1.2")
 
 if __name__ == "__main__":
     unittest.main()

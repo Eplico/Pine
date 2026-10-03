@@ -1,0 +1,14 @@
+Evergreen-Patch: installer-title
+Why: The installer .exe first unpacks itself, showing a progress window
+  titled from app.tag: "Mozilla Firefox". Title it Evergreen.
+Upstream: not upstreamable (the brand name is hard-coded upstream)
+Drop-when: Firefox takes the self-extractor's title from the branding
+Owner: Evergreen maintainers
+
+--- a/browser/installer/windows/app.tag
++++ b/browser/installer/windows/app.tag
+@@ -1,3 +1,3 @@
+ ;!@Install@!UTF-8!
+-Title="Mozilla Firefox"
++Title="Evergreen"
+ RunProgram="setup.exe"

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import checks, dev, extensions, mach, prepare, release, upstream
 from . import patches as patchlib
-from .config import PREFS_FILE, EgError, host_platform, load_upstream, work_dir
+from .config import PREFS_FILE, EgError, host_platform, load_upstream, load_version, work_dir
 from .prefs import load_prefs
 
 PLATFORMS = ("windows", "linux", "macos")
@@ -23,6 +23,7 @@ def cmd_status(args) -> None:
     tree = prepare.tree_dir(up)
     state = prepare.read_state(tree)
     files = upstream.release_files(up)
+    print(f"Evergreen:       {load_version()}")
     print(f"Firefox pin:     {up.version} (sha512 {'pinned' if up.sha512 else 'NOT pinned'})")
     print(f"Host platform:   {host_platform()}")
     print(f"Work dir:        {work_dir()}")
@@ -71,9 +72,9 @@ def cmd_package(args) -> None:
 
 
 def cmd_collect(args) -> None:
-    up = load_upstream()
-    print("Collecting release files")
-    release.collect(_tree(), up, args.platform or host_platform(), args.build, Path(args.out))
+    version = load_version()
+    print(f"Collecting release files for Evergreen {version}")
+    release.collect(_tree(), version, args.platform or host_platform(), Path(args.out))
 
 
 def cmd_run(args) -> None:
@@ -144,7 +145,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("collect", help="copy packages to release names with SHA256SUMS")
     s.add_argument("--out", required=True, help="output directory")
-    s.add_argument("--build", default="1", help="Evergreen build number (default 1)")
     s.add_argument("--platform", choices=PLATFORMS, help="target platform (default: host)")
     s.set_defaults(func=cmd_collect)
 

@@ -17,16 +17,12 @@ on:
         description: "Publish a GitHub release when the build and smoke test pass"
         type: boolean
         default: true
-      build:
-        description: "Evergreen build number (default: the workflow run number)"
-        required: false
-        default: ""
       from_run:
         description: "Skip the build: test and publish the packages of this earlier run ID"
         required: false
         default: ""
   push:
-    tags: ["v*"]  # v<firefox version>-<build>, e.g. v157.0-3
+    tags: ["v*"]  # v<Evergreen version>, e.g. v0.1 (must match VERSION)
 
 permissions:
   contents: write  # to publish releases
@@ -57,21 +53,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Release version
-        env:
-          INPUT_BUILD: ${{ inputs.build }}
         run: |
+          $version = (Get-Content VERSION -Raw).Trim()
           $firefox = (Get-Content upstream.json | ConvertFrom-Json).firefox.version
-          $build = $env:INPUT_BUILD
-          if ($env:GITHUB_REF_TYPE -eq 'tag') {
-            if ($env:GITHUB_REF_NAME -notmatch "^v$([regex]::Escape($firefox))-(\d+)$") {
-              throw "Tag $env:GITHUB_REF_NAME does not match v$firefox-<build> (upstream.json pins Firefox $firefox)"
-            }
-            $build = $Matches[1]
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match VERSION (v$version)"
           }
-          if (-not $build) { $build = $env:GITHUB_RUN_NUMBER }
-          if ($build -notmatch '^\d+$') { throw "Build number must be a number, got '$build'" }
-          "EG_BUILD=$build" >> $env:GITHUB_ENV
-          "Evergreen $firefox-$build"
+          "Evergreen $version, built on Firefox $firefox"
 
       - name: Runner resources
         run: |
@@ -124,7 +112,7 @@ jobs:
         run: C:\mozilla-build\msys2\usr\bin\bash.exe --login -c "python3 eg.py package"
 
       - name: Collect release files
-        run: python eg.py collect --platform windows --build $env:EG_BUILD --out release
+        run: python eg.py collect --platform windows --out release
 
       - name: Upload release files
         uses: actions/upload-artifact@v4
@@ -222,9 +210,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FROM_RUN: ${{ inputs.from_run }}
         run: |
-          $zip = Get-ChildItem release\*-win64-portable.zip | Select-Object -First 1
-          $version = $zip.Name -replace '^Evergreen-(.+)-win64-portable\.zip$', '$1'
-          $firefox = $version -replace '-\d+$', ''
+          $version = (Get-Content VERSION -Raw).Trim()
+          $firefox = (Get-Content upstream.json | ConvertFrom-Json).firefox.version
+          if (-not (Test-Path "release\Evergreen-$version-win64-portable.zip")) {
+            throw "The packages are not Evergreen $version's (VERSION changed since that build?)"
+          }
           # The commit the packages were built from.
           $sha = $env:GITHUB_SHA
           if ($env:FROM_RUN) {
@@ -248,5 +238,6 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
             gh release create $env:GITHUB_REF_NAME @files --title $title --notes-file release-notes.md --prerelease --verify-tag
           } else {
+            # A version is published once; bump VERSION for the next release.
             gh release create "v$version" @files --title $title --notes-file release-notes.md --prerelease --target $sha
           }

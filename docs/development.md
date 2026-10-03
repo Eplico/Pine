@@ -94,7 +94,8 @@ These are the same steps the Windows build workflow runs.
    `python eg.py package` builds the portable zip and, from it, the installer
    (`obj-evergreen\dist\evergreen-157.0.en-US.win64.zip` and
    `...win64.installer.exe`). `python eg.py collect --out release` checks the
-   zip and copies both to release names with `SHA256SUMS.txt`.
+   zip and copies both to release names (`Evergreen-<VERSION>-win64-…`)
+   with `SHA256SUMS.txt`.
 9. `python tests/smoke/smoke_test.py --binary <unzipped>\evergreen\evergreen.exe`
    runs the end-to-end checks against the build.
 
@@ -106,15 +107,18 @@ prepared, and the patch budget.
 Releases are built by the **Windows build** workflow
 (`.github/workflows/windows-build.yml`) on GitHub's Windows runners:
 
-1. On GitHub: **Actions › Windows build › Run workflow** (leave *Publish*
-   ticked). Or push a tag such as `v157.0-3`.
+1. Set the version in `VERSION` (e.g. `0.1`; each version is published
+   once). On GitHub: **Actions › Windows build › Run workflow** (leave
+   *Publish* ticked). Or push the matching tag, e.g. `v0.1`.
 2. The *build* job installs MozillaBuild, fetches and verifies the Firefox
    source, builds Evergreen (about two hours from scratch; sccache makes
    later builds faster), packages the portable zip and the installer, and
    uploads them as the *evergreen-windows* artifact.
 3. The *test-and-publish* job runs the smoke test against the packaged
-   `evergreen.exe` and publishes a GitHub pre-release named after the
-   Firefox version and the build number, with `SHA256SUMS.txt`.
+   `evergreen.exe`, opens the installer to check its windows
+   (`tests/installer/check_installer.ps1`, at 100% and 150% display
+   scaling), and publishes a GitHub pre-release, "Evergreen <version>", with
+   `SHA256SUMS.txt`.
 4. If a step fails, the *build-diagnostics* artifact has the mozconfig,
    `config.log` and a listing of the build's `dist\`; *smoke-diagnostics* has
    the smoke-test screenshots and the browser log.

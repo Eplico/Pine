@@ -34,6 +34,7 @@ from .config import (
     SRC_DIR,
     EgError,
     Upstream,
+    load_version,
     work_dir,
 )
 from .prefs import load_prefs
@@ -115,6 +116,9 @@ def overlay(src_root: Path, tree: Path, owned: set[str]) -> list[str]:
 
 
 INSTALLER_STUB = Path("other-licenses/7zstub/firefox/7zSD.Win32.sfx")
+# The stub's version information, as Windows shows it (Properties, Task
+# Manager). InternalName, shown nowhere, is shortened to make room.
+STUB_VERSION_STRINGS = {"FileDescription": "Evergreen", "ProductName": "Evergreen", "InternalName": "setup"}
 
 
 def make_branding(tree: Path) -> list[str]:
@@ -138,7 +142,10 @@ def make_branding(tree: Path) -> list[str]:
     stub = tree / INSTALLER_STUB
     if stub.exists():
         icon = (BRANDING_DIR / "source" / "installer-stub.ico").read_bytes()
-        (dest / INSTALLER_STUB.name).write_bytes(sfxstub.replace_icons(stub.read_bytes(), icon))
+        branded = sfxstub.replace_icons(stub.read_bytes(), icon)
+        branded = sfxstub.replace_version_strings(branded, STUB_VERSION_STRINGS | {"ProductVersion": load_version()},
+                                                  optional=("ProductVersion",))
+        (dest / INSTALLER_STUB.name).write_bytes(branded)
         copied.append((Path("browser/branding/evergreen") / INSTALLER_STUB.name).as_posix())
     return copied
 
