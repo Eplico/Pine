@@ -117,8 +117,15 @@ def overlay(src_root: Path, tree: Path, owned: set[str]) -> list[str]:
 
 INSTALLER_STUB = Path("other-licenses/7zstub/firefox/7zSD.Win32.sfx")
 # The stub's version information, as Windows shows it (Properties, Task
-# Manager). InternalName, shown nowhere, is shortened to make room.
-STUB_VERSION_STRINGS = {"FileDescription": "Evergreen", "ProductName": "Evergreen", "InternalName": "setup"}
+# Manager). The block cannot grow (sfxstub.py), so InternalName (shown
+# nowhere) and OriginalFilename (7-Zip's "7zS.sfx.exe") are shortened to make
+# room for a product version of up to five characters, e.g. 0.1.1.
+STUB_VERSION_STRINGS = {
+    "FileDescription": "Evergreen",
+    "ProductName": "Evergreen",
+    "InternalName": "setup",
+    "OriginalFilename": "setup.exe",
+}
 
 
 def make_branding(tree: Path) -> list[str]:

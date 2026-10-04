@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import http.server
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -925,6 +926,17 @@ class Run:
             assert r["cancelled"] == "Home", r
             return "click, type, Enter; Escape cancels"
 
+        def user_agent():
+            ua = self.js(
+                """return Cc["@mozilla.org/network/protocol;1?name=http"]
+                  .getService(Ci.nsIHttpProtocolHandler).userAgent;"""
+            )
+            # Exactly Firefox's: sites such as addons.mozilla.org look for the
+            # Firefox token, and an extra one would make Evergreen stand out.
+            assert re.search(r"Gecko/\d+ Firefox/[\d.]+$", ua), f"not Firefox's User-Agent: {ua}"
+            assert "Evergreen" not in ua, f"the User-Agent names Evergreen: {ua}"
+            return ua
+
         def console_errors():
             r = self.errors_before_restart + self.js("return evergreenConsoleErrors();")
             assert not r, "\n  " + "\n  ".join(r)
@@ -932,6 +944,7 @@ class Run:
         self.check("Evergreen loads into the window", loads)
         self.check("window layout", layout)
         self.check("default prefs from prefs/evergreen.js", prefs)
+        self.check("identifies to websites exactly as Firefox", user_agent)
         self.check("first run: ETP Strict and Ecosia", first_run)
         self.check("first run: offer to import from another browser", import_offer)
         self.check("Spaces with separate sign-ins (containers)", spaces_and_containers)

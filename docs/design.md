@@ -237,12 +237,12 @@ documented patch.
 - **Upstream what we can.** If a hook is useful beyond Evergreen, file it
   upstream and record the bug number.
 - **Budget: ≤ 30 patches and ≤ 2,000 changed upstream lines at v1.0.**
-  `eg.py status` and `eg.py lint` report it. **Current: 4 patches, 8 lines**
+  `eg.py status` and `eg.py lint` report it. **Current: 5 patches, 10 lines**
   (registering Evergreen's component; packaging the bundled extensions;
   building the installer from the branded self-extractor stub; titling the
-  self-extractor "Evergreen"). `eg.py prepare` brands that stub: Evergreen's
-  icon, and "Evergreen" as its description and product name in the version
-  information Windows shows (`tools/eg/sfxstub.py`).
+  self-extractor "Evergreen"; Firefox's User-Agent). `eg.py prepare` brands
+  that stub: Evergreen's icon, and "Evergreen" as its description and product
+  name in the version information Windows shows (`tools/eg/sfxstub.py`).
 
 ### 5.4 Tracking upstream
 
@@ -615,8 +615,9 @@ are not Evergreen servers.
 
 ### 8.6 Things we deliberately don't change
 
-The user agent, Mozilla's root store, and Fission, sandbox and process
-settings.
+The user agent (exactly Firefox's: patch 0005 names the app "Firefox" in it,
+and the smoke test checks the built browser), Mozilla's root store, and
+Fission, sandbox and process settings.
 
 ### 8.7 Search
 
@@ -726,7 +727,7 @@ builder. Until then, each release records the toolchain and source hashes.
 | UI unit tests | Spaces model, archive policy, search defaults, new-tab search box (36 tests) | `npm test` |
 | Tooling tests | Prefs parser, patch lint, real GPG verification with pinned keys, full prepare pipeline on a fake tarball, dev harness, release naming, installer stub branding (35 tests) | `python -m unittest discover -s tests/python` |
 | Patch / pref checks | Patches apply and prefs exist in the pinned Firefox | `eg.py check-patches`, `eg.py check-prefs` |
-| **Smoke test** | Evergreen running in a real Firefox (CI: the pinned release on Linux, the runner's Firefox on Windows; the release workflow: the built `evergreen.exe`): prefs applied, first run (ETP Strict, Ecosia, the import offer), Spaces and containers, the new-tab search box (Ctrl+T and the + button; container, tab at the top, history suggestions), new tabs at the top, the start page, switching, keyboard shortcut, moving tabs across identities, auto-archive, Archive panel, history clearing, editor, restart persistence (Spaces and the search default), deleting Spaces, private windows, toolbar order and alignment, toolbar and sidebar sizes against Firefox's own, hiding and revealing the sidebar (and how quickly it slides away), renaming a Space, no console errors (25 checks) | `python tests/smoke/smoke_test.py` |
+| **Smoke test** | Evergreen running in a real Firefox (CI: the pinned release on Linux, the runner's Firefox on Windows; the release workflow: the built `evergreen.exe`): prefs applied, first run (ETP Strict, Ecosia, the import offer), Spaces and containers, the new-tab search box (Ctrl+T and the + button; container, tab at the top, history suggestions), new tabs at the top, the start page, switching, keyboard shortcut, moving tabs across identities, auto-archive, Archive panel, history clearing, editor, restart persistence (Spaces and the search default), deleting Spaces, private windows, toolbar order and alignment, toolbar and sidebar sizes against Firefox's own, hiding and revealing the sidebar (and how quickly it slides away), renaming a Space, the User-Agent, no console errors (26 checks) | `python tests/smoke/smoke_test.py` |
 | Prefs audit *(M0)* | Starts the *packaged* build and checks every default and build protection | — |
 | Network egress test *(M0)* | Scripted session through a logging proxy; fails on any host outside the allowlist | — |
 | Update test *(M3)* | Old → new release through a signed MAR; tampered MAR rejected | — |

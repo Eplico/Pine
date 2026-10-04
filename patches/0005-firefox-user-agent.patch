@@ -1,0 +1,24 @@
+Evergreen-Patch: firefox-user-agent
+Why: Firefox names the browser in its User-Agent after the app basename,
+  so Evergreen sent "... Gecko/20100101 Evergreen/157.0" with no Firefox
+  token. Sites that look for Firefox then treat Evergreen as another
+  browser (addons.mozilla.org says "Download Firefox and get the
+  extension" instead of offering to install), and the rare token makes
+  Evergreen users easier to fingerprint. Report exactly Firefox's
+  User-Agent, as other Firefox-based browsers do. MOZ_APP_UA_NAME can only
+  be set by the project's moz.configure.
+Upstream: not upstreamable (Firefox itself is named Firefox)
+Drop-when: Firefox lets a build set the User-Agent name another way
+Owner: Evergreen maintainers
+
+--- a/browser/moz.configure
++++ b/browser/moz.configure
+@@ -13,6 +13,8 @@ imply_option("MOZ_PROFILE_MIGRATOR", True)
+ 
+ imply_option("MOZ_APP_VENDOR", "Mozilla")
+ imply_option("MOZ_APP_ID", "{ec8030f7-c20a-464f-9b0e-13a3a9e97384}")
++# Evergreen: the same User-Agent as Firefox (see patch header).
++imply_option("MOZ_APP_UA_NAME", "Firefox")
+ # Include the DevTools client, not just the server (which is the default)
+ imply_option("MOZ_DEVTOOLS", "all")
+ imply_option("BROWSER_CHROME_URL", "chrome://browser/content/browser.xhtml")

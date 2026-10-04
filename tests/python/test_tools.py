@@ -256,6 +256,7 @@ class PrepareTest(unittest.TestCase):
             "browser/installer/package-manifest.in": (FIXTURES / "browser-installer-package-manifest.in").read_text(),
             "browser/installer/windows/Makefile.in": (FIXTURES / "browser-installer-windows-Makefile.in").read_text(),
             "browser/installer/windows/app.tag": (FIXTURES / "browser-installer-windows-app.tag").read_text(),
+            "browser/moz.configure": (FIXTURES / "browser-moz.configure").read_text(),
             "browser/branding/unofficial/configure.sh": "MOZ_APP_DISPLAYNAME=Nightly\n",
             "browser/branding/unofficial/locales/en-US/brand.ftl": "-brand-short-name = Nightly\n",
             "browser/branding/unofficial/firefox.ico": "upstream icon",
@@ -282,6 +283,7 @@ class PrepareTest(unittest.TestCase):
         self.assertIn("SFX_MODULE = $(topsrcdir)/$(MOZ_BRANDING_DIRECTORY)/7zSD.Win32.sfx",
                       (tree / "browser/installer/windows/Makefile.in").read_text())
         self.assertIn('Title="Evergreen"', (tree / "browser/installer/windows/app.tag").read_text())
+        self.assertIn('imply_option("MOZ_APP_UA_NAME", "Firefox")', (tree / "browser/moz.configure").read_text())
         branded = (tree / "browser/branding/evergreen/7zSD.Win32.sfx").read_bytes()
         self.assertEqual(len(branded), len(self.stub))
         self.assertNotEqual(branded, self.stub)
@@ -539,12 +541,12 @@ class SfxStubTest(unittest.TestCase):
         blob = (FIXTURES / "7zSD-version-info.bin").read_bytes()
         # As in the real stub, the bytes after the block are not free.
         stub = make_pe({1: b"A" * 40}, [(16, 1)], version=blob, after_version=b"\0\x28\x03\0")
-        strings = dict(prepare.STUB_VERSION_STRINGS, ProductVersion="0.1")
+        strings = dict(prepare.STUB_VERSION_STRINGS, ProductVersion="0.1.1")
         out = sfxstub.replace_version_strings(stub, strings, optional=("ProductVersion",))
         self.assertEqual(len(out), len(stub))
         got = version_strings(out)
         self.assertEqual((got["FileDescription"], got["ProductName"], got["ProductVersion"]),
-                         ("Evergreen", "Evergreen", "0.1"))
+                         ("Evergreen", "Evergreen", "0.1.1"))
         self.assertEqual(got["LegalCopyright"], "Mozilla")  # the stub's own, kept
         self.assertEqual(out[-len(b"<manifest/>"):], b"<manifest/>")
         # A version too long to fit leaves the product version blank...

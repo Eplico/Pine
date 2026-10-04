@@ -6,11 +6,11 @@ a command bar, Peek and a mini window for links from other apps.
 
 Evergreen is a thin layer on upstream Firefox Release: build configuration,
 default prefs, Evergreen's own UI code and a small, documented set of patches
-(currently four, eight lines in all). Keeping the diff small lets us ship each
+(currently five, ten lines in all). Keeping the diff small lets us ship each
 Firefox security release quickly. Evergreen runs no servers; everything it adds
 lives on your device.
 
-**Status:** Evergreen 0.1, an early preview built on Firefox 157.0. Spaces
+**Status:** an early preview (0.1.x), built on Firefox 157.0. Spaces
 (with optional separate sign-ins), Favorites, kept tabs, auto-archive, a
 start page and an Arc-style new-tab search box, hardened defaults and Ecosia
 as the default search engine work, and pass an end-to-end test both in the
@@ -21,8 +21,8 @@ is the first platform.
 
 Get the **[latest release](https://github.com/Eplico/Pine/releases/latest)**:
 
-- **`Evergreen-0.1-win64-setup.exe`**: the installer.
-- **`Evergreen-0.1-win64-portable.zip`**: unzip anywhere and run `evergreen\evergreen.exe`.
+- **`Evergreen-<version>-win64-setup.exe`**: the installer.
+- **`Evergreen-<version>-win64-portable.zip`**: unzip anywhere and run `evergreen\evergreen.exe`.
 
 These are early preview builds, made by this repository's
 [Windows build workflow](.github/workflows/windows-build.yml) from the

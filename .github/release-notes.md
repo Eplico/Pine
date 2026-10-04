@@ -20,6 +20,7 @@ Get-FileHash .\Evergreen-@VERSION@-win64-setup.exe -Algorithm SHA256
 - **New tabs open at the top** of the tab list.
 - Arc-style **Spaces** in the vertical-tab sidebar, optionally with **separate sign-ins** (each Space in its own container), **Favorites** (pinned tabs), **Keep in Space**, and an **Archive** for tabs unused for 12 hours. Click a Space's name to rename it.
 - **Hide the sidebar** with the sidebar button next to the tree menu (or `Ctrl+Alt+Z`); move the mouse to the left edge of the window to slide it back in over the page. It slides away as soon as the mouse leaves.
+- Installs add-ons from **addons.mozilla.org** like Firefox. Evergreen tells websites it is Firefox (the same User-Agent), so sites treat it as Firefox and it does not stand out.
 - On first run, Evergreen offers to **import** bookmarks, passwords and history from another browser on your computer.
 - Hardened defaults: HTTPS-Only, strict tracking protection, encrypted DNS (Quad9), no telemetry or studies compiled in, no sponsored content, AI features blocked, uBlock Origin bundled.
 - **Ecosia** is the default search engine; Google, DuckDuckGo and custom engines are in Settings › Search.
