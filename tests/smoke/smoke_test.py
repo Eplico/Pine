@@ -412,6 +412,9 @@ class Run:
                 let box = d.getElementById("evergreen-search");
                 let input = d.getElementById("evergreen-search-input");
                 let key = k => input.dispatchEvent(new w.KeyboardEvent("keydown", { key: k, bubbles: true }));
+                // From a page (over the start page, Enter loads in place: empty_space).
+                gB.selectedTab = tabByTitle("Page C") ?? gB.selectedTab;
+                await sleep(50);
                 let count = gB.tabs.length;
                 // Ctrl+T (the new-tab command) opens the search box, not a tab.
                 let command = d.getElementById("cmd_newNavigatorTab");
@@ -937,6 +940,59 @@ class Run:
             assert "Evergreen" not in ua, f"the User-Agent names Evergreen: {ua}"
             return ua
 
+        def empty_space():
+            r = self.js(
+                """
+                let d = w.document;
+                let box = d.getElementById("evergreen-search");
+                let input = d.getElementById("evergreen-search-input");
+                let spaceId = c.activeSpaceId;
+                let inSpace = () => gB.tabs.filter(t => !t.pinned && !t.closing
+                  && t.getAttribute("evergreen-space") == spaceId);
+                let listed = () => inSpace().filter(t => w.getComputedStyle(t).display != "none");
+                let blanks = () => gB.tabs.filter(t => !t.closing && t.hasAttribute("evergreen-blank")).length;
+                let state = () => ({ sameSpace: c.activeSpaceId == spaceId, listed: listed().length, blanks: blanks(),
+                  selectedBlank: gB.selectedTab.hasAttribute("evergreen-blank"), mode: box.getAttribute("mode"),
+                  url: gB.selectedBrowser.currentURI.spec });
+                // Close every tab in the Space: the start page shows, with no tab listed.
+                for (let t of inSpace()) {
+                  gB.removeTab(t, { animate: false });
+                }
+                await until(() => box.getAttribute("mode") == "start" && !box.hidden);
+                await sleep(200);
+                let closed = state();
+                // Closing the start page (Ctrl+W) leaves it there.
+                gB.removeTab(gB.selectedTab, { animate: false });
+                await until(() => box.getAttribute("mode") == "start" && blanks() == 1, 3000)
+                  .catch(() => { throw new Error("after Ctrl+W: " + JSON.stringify({ ...state(), tabs: tabList(),
+                    all: gB.tabs.map(t => [t.label, t.linkedBrowser.currentURI.spec, t.hasAttribute("evergreen-blank"), t.closing, t.selected]) })); });
+                await sleep(200);
+                let closedAgain = state();
+                // Ctrl+T over the start page, an address and Enter: it loads in the
+                // start page's own tab, which joins the list (no tab is left behind).
+                let startTab = gB.selectedTab, count = gB.tabs.length;
+                d.getElementById("cmd_newNavigatorTab").doCommand();
+                await sleep(100);
+                input.value = "about:robots";
+                input.dispatchEvent(new w.Event("input", { bubbles: true }));
+                input.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+                await until(() => startTab.linkedBrowser.currentURI.spec == "about:robots");
+                await sleep(200);
+                let opened = { ...state(), sameTab: gB.selectedTab == startTab, added: gB.tabs.length - count,
+                  first: listed()[0] == startTab };
+                return { closed, closedAgain, opened, windowOpen: !w.closed, tabs: tabList() };
+                """
+            )
+            self.shot("empty-space")
+            closed, again, opened = r["closed"], r["closedAgain"], r["opened"]
+            assert r["windowOpen"], r
+            assert closed["sameSpace"] and closed["mode"] == "start" and closed["selectedBlank"], f"no start page: {r}"
+            assert closed["listed"] == 0 and closed["blanks"] == 1, f"the start page should not be a listed tab: {r}"
+            assert again["sameSpace"] and again["mode"] == "start" and again["listed"] == 0 and again["blanks"] == 1, r
+            assert opened["url"] == "about:robots" and opened["sameTab"] and opened["added"] == 0, r
+            assert opened["listed"] == 1 and opened["first"] and opened["blanks"] == 0, r
+            return "closing every tab shows the start page; what is opened from it becomes the Space's tab"
+
         def console_errors():
             r = self.errors_before_restart + self.js("return evergreenConsoleErrors();")
             assert not r, "\n  " + "\n  ".join(r)
@@ -966,6 +1022,7 @@ class Run:
         self.check("sidebar collapses and the left edge reveals it", sidebar_collapse)
         self.check("sidebar keyboard shortcut", sidebar_shortcut)
         self.check("rename a Space by clicking its name", rename)
+        self.check("an empty Space shows the start page, with no tab", empty_space)
         self.check("no Evergreen errors in the console", console_errors)
         self.quit()
         print(f"\n{len(self.failures)} failed" if self.failures else "\nAll checks passed")

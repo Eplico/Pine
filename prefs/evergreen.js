@@ -19,6 +19,8 @@ pref("sidebar.visibility", "always-show");
 // Downloads sits at the start of the toolbar, so it is always shown.
 pref("browser.download.autohideButton", false);
 pref("browser.tabs.groups.enabled", true);
+// Closing the last tab shows the start page instead of closing the window.
+pref("browser.tabs.closeWindowWithLastTab", false);
 // Containers back Spaces that use separate sign-ins.
 pref("privacy.userContext.enabled", true);
 pref("privacy.userContext.ui.enabled", true);

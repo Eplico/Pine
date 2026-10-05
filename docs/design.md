@@ -490,10 +490,15 @@ tab to a Space, searching the Archive and Evergreen commands. Whether to
 build that on a floating instance of the Firefox address bar (its providers
 and keyboard handling) is still open.
 
-**Start page.** A tab showing Firefox's home or new-tab page (`about:home`,
-`about:newtab`) is covered by a solid page in the Space's colour with
-"Evergreen" above a centred search box; Enter loads the result in that tab.
-The page underneath is never shown.
+**Start page.** When a Space has no tabs (the browser starts with nothing to
+restore, or the last tab is closed) the page area shows a solid page in the
+Space's colour with "Evergreen" above a centred search box, and the tab list
+is empty, as in Arc. Closing the last tab never closes the window
+(`browser.tabs.closeWindowWithLastTab` is off) or jumps to another Space or a
+Favorite. Underneath is an ordinary tab showing Firefox's home or new-tab
+page, kept out of the tab list and closed as soon as another tab is selected;
+whatever is opened from the start page (its box, `Ctrl+T`, the address bar)
+loads in that tab, which then joins the top of the list.
 
 **Trust.** The start page and the box are drawn by the browser over the page
 area. A site could imitate them, as it could imitate any new-tab page; the
@@ -727,7 +732,7 @@ builder. Until then, each release records the toolchain and source hashes.
 | UI unit tests | Spaces model, archive policy, search defaults, new-tab search box (36 tests) | `npm test` |
 | Tooling tests | Prefs parser, patch lint, real GPG verification with pinned keys, full prepare pipeline on a fake tarball, dev harness, release naming, installer stub branding (35 tests) | `python -m unittest discover -s tests/python` |
 | Patch / pref checks | Patches apply and prefs exist in the pinned Firefox | `eg.py check-patches`, `eg.py check-prefs` |
-| **Smoke test** | Evergreen running in a real Firefox (CI: the pinned release on Linux, the runner's Firefox on Windows; the release workflow: the built `evergreen.exe`): prefs applied, first run (ETP Strict, Ecosia, the import offer), Spaces and containers, the new-tab search box (Ctrl+T and the + button; container, tab at the top, history suggestions), new tabs at the top, the start page, switching, keyboard shortcut, moving tabs across identities, auto-archive, Archive panel, history clearing, editor, restart persistence (Spaces and the search default), deleting Spaces, private windows, toolbar order and alignment, toolbar and sidebar sizes against Firefox's own, hiding and revealing the sidebar (and how quickly it slides away), renaming a Space, the User-Agent, no console errors (26 checks) | `python tests/smoke/smoke_test.py` |
+| **Smoke test** | Evergreen running in a real Firefox (CI: the pinned release on Linux, the runner's Firefox on Windows; the release workflow: the built `evergreen.exe`): prefs applied, first run (ETP Strict, Ecosia, the import offer), Spaces and containers, the new-tab search box (Ctrl+T and the + button; container, tab at the top, history suggestions), new tabs at the top, the start page, an empty Space (closing every tab), switching, keyboard shortcut, moving tabs across identities, auto-archive, Archive panel, history clearing, editor, restart persistence (Spaces and the search default), deleting Spaces, private windows, toolbar order and alignment, toolbar and sidebar sizes against Firefox's own, hiding and revealing the sidebar (and how quickly it slides away), renaming a Space, the User-Agent, no console errors (27 checks) | `python tests/smoke/smoke_test.py` |
 | Prefs audit *(M0)* | Starts the *packaged* build and checks every default and build protection | — |
 | Network egress test *(M0)* | Scripted session through a logging proxy; fails on any host outside the allowlist | — |
 | Update test *(M3)* | Old → new release through a signed MAR; tampered MAR rejected | — |

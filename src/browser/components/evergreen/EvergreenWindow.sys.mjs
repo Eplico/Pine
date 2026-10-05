@@ -26,7 +26,7 @@ import { isArchivable, isRecordable, makeEntry } from "./Archive.sys.mjs";
 import { ArchiveStore, archiveSettings } from "./ArchiveStore.sys.mjs";
 import { SpacesStore } from "./SpacesStore.sys.mjs";
 import { WindowLayout, applyToolbarLayout } from "./EvergreenLayout.sys.mjs";
-import { SearchBar } from "./EvergreenSearch.sys.mjs";
+import { SearchBar, isStartPage } from "./EvergreenSearch.sys.mjs";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const STYLESHEET = new URL("evergreen.css", import.meta.url).href;
@@ -34,6 +34,9 @@ const FTL = "browser/evergreen.ftl";
 
 const TAB_SPACE = "evergreen-space"; // SessionStore tab value + tab attribute
 const TAB_KEEP = "evergreen-keep"; // SessionStore tab value + tab attribute
+// A tab showing the start page: kept out of the tab list (evergreen.css), so
+// an empty Space shows the start page with no tab in the list, as in Arc.
+const TAB_BLANK = "evergreen-blank";
 const WINDOW_SPACE = "evergreen-active-space"; // SessionStore window value
 const HIDDEN_BY = "evergreen";
 // Applied once per profile; bump to apply a changed toolbar layout again.
@@ -180,7 +183,20 @@ class WindowController {
 
     let tabs = this.gBrowser.tabContainer;
     this.listen(tabs, "TabOpen", e => this.onTabOpen(e.target));
-    this.listen(tabs, "TabSelect", e => this.onTabSelect(e.target));
+    this.listen(tabs, "TabSelect", e => this.onTabSelect(e.target, e.detail?.previousTab));
+    this.listen(tabs, "TabClose", e => this.onTabClose(e.target));
+    this.listen(tabs, "SSTabRestored", e => this.updateBlank(e.target));
+    let progress = {
+      onLocationChange: (browser, webProgress) => {
+        let tab = webProgress.isTopLevel && this.gBrowser.getTabForBrowser(browser);
+        if (tab) {
+          this.updateBlank(tab);
+        }
+      },
+    };
+    this.gBrowser.addTabsProgressListener(progress);
+    this._cleanups.push(() => this.gBrowser.removeTabsProgressListener(progress));
+    this._cleanups.push(() => this.win.clearTimeout(this._pruneTimer));
     this.listen(tabs, "TabPinned", () => this.render());
     this.listen(tabs, "TabUnpinned", e => this.onTabUnpinned(e.target));
     this.listen(tabs, "TabShow", e => this.onTabShow(e.target));
@@ -192,6 +208,10 @@ class WindowController {
     this._cleanups.push(() => SpacesStore.removeListener(onSpacesChanged));
 
     this.restoreWindowState();
+    for (let tab of this.gBrowser.tabs) {
+      this.updateBlank(tab);
+    }
+    this.schedulePrune();
     doc.documentElement.setAttribute("evergreen", "true");
     this._cleanups.push(() => doc.documentElement.removeAttribute("evergreen"));
   }
@@ -289,6 +309,9 @@ class WindowController {
   }
 
   onTabOpen(tab) {
+    // A preloaded new-tab page arrives already loaded, with no location
+    // change to report it.
+    this.updateBlank(tab);
     if (tab.pinned) {
       return;
     }
@@ -322,7 +345,15 @@ class WindowController {
     }
   }
 
-  onTabSelect(tab) {
+  onTabSelect(tab, previous) {
+    this.schedulePrune();
+    if (previous?.closing && !this._switching) {
+      // Firefox picked this tab because the selected one is closing. If that
+      // was the Space's last tab, onTabClose shows the start page instead, so
+      // don't follow this tab into another Space yet.
+      this._closing = { tab: previous, spaceId: this.activeSpaceId };
+      return;
+    }
     if (tab.pinned) {
       return;
     }
@@ -335,6 +366,68 @@ class WindowController {
       // tab", for example) switches to that Space.
       this.applySpace(id, { selectTab: false });
     }
+  }
+
+  onTabClose(tab) {
+    let closing = this._closing?.tab == tab ? this._closing : null;
+    this._closing = null;
+    if (tab.pinned) {
+      return;
+    }
+    let spaceId = closing?.spaceId ?? this.spaceOf(tab);
+    let remaining = this.gBrowser.tabs.filter(t => t != tab && !t.closing);
+    if (!remaining.length) {
+      // The window's last tab: Firefox replaces it with a new-tab page (the
+      // start page), as browser.tabs.closeWindowWithLastTab is off.
+      return;
+    }
+    if (closing && spaceId == this.activeSpaceId && !remaining.some(t => !t.pinned && this.spaceOf(t) == spaceId)) {
+      // The Space's last tab, and the one being viewed: show the Space's start
+      // page rather than a Favorite or another Space's tab.
+      let blank = this.openTabInSpace(this.activeSpace());
+      this.gBrowser.selectedTab = blank;
+      this.applySpace(spaceId, { selectTab: false });
+      return;
+    }
+    let selected = this.gBrowser.selectedTab;
+    let id = !selected.pinned && this.spaceOf(selected);
+    if (closing && id && id != this.activeSpaceId) {
+      this.applySpace(id, { selectTab: false });
+    }
+  }
+
+  /** Mark (or unmark) a tab as showing the start page. */
+  updateBlank(tab) {
+    let blank = !tab.pinned && !tab.closing && isStartPage(tab.linkedBrowser?.currentURI?.spec ?? "");
+    if (blank == tab.hasAttribute(TAB_BLANK)) {
+      return;
+    }
+    tab.toggleAttribute(TAB_BLANK, blank);
+    if (blank) {
+      this.schedulePrune();
+    } else if (!tab.closing) {
+      // Something was opened from the start page: it becomes a tab, at the
+      // top of the list like other new tabs.
+      this.gBrowser.moveTabToStart(tab);
+    }
+  }
+
+  /**
+   * Start-page tabs exist only while shown: one that is no longer selected
+   * is closed (an empty Space gets a new one when it is shown again).
+   */
+  schedulePrune() {
+    if (this._pruneTimer) {
+      return;
+    }
+    this._pruneTimer = this.win.setTimeout(() => {
+      this._pruneTimer = null;
+      for (let tab of [...this.gBrowser.tabs]) {
+        if (tab.hasAttribute(TAB_BLANK) && !tab.selected && !tab.closing && !tab.pinned) {
+          this.gBrowser.removeTab(tab, { animate: false, skipSessionStore: true, closeWindowWithLastTab: false });
+        }
+      }
+    }, 0);
   }
 
   updateTabVisibility(tab) {

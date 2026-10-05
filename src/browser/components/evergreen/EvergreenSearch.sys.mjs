@@ -11,7 +11,8 @@
  *  - New tab (Ctrl+T, the New Tab button): the box floats over the current
  *    page, as Arc's command bar does. Enter opens a new tab (at the top of
  *    the list, in the Space's container: EvergreenWindow); Escape or a click
- *    outside closes it without opening one.
+ *    outside closes it without opening one. Over the start page, Enter loads
+ *    in the start page's own tab, which is not in the tab list until then.
  *
  * Text that is an address opens it; anything else searches with the default
  * search engine (Firefox's own address parsing decides, as in the address
@@ -419,7 +420,9 @@ export class SearchBar {
     if (!result?.url) {
       return;
     }
-    let where = this.mode == "launcher" ? "tab" : "current";
+    // The start page's tab is hidden from the tab list, so whatever is opened
+    // from it replaces it rather than leaving it behind.
+    let where = this.mode == "launcher" && !this.selectedIsStartPage ? "tab" : "current";
     this.hide();
     let params = { inBackground: false };
     if (result.postData) {

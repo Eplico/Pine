@@ -299,6 +299,12 @@
   font-weight: 600;
 }
 
+/* A tab showing the start page is not listed: an empty Space shows the start
+ * page with no tab, as in Arc (EvergreenWindow: TAB_BLANK). */
+:root[evergreen] .tabbrowser-tab[evergreen-blank] {
+  display: none;
+}
+
 .tabbrowser-tab[evergreen-keep] .tab-background {
   box-shadow: inset 3px 0 0 var(--evergreen-space-color);
 }
