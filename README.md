@@ -48,6 +48,7 @@ profile. Your own Firefox and profile are not touched.
 
 - [Design document](docs/design.md): goals, threat model, architecture, features, decisions
 - [Development guide](docs/development.md): dev harness, tests, building on Windows, patches
+- [Handoff](docs/handoff.md): current state, how to release, known issues and next steps
 
 ## Licence
 
