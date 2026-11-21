@@ -851,19 +851,16 @@ class Run:
                 while (before && !shown(before)) before = before.previousElementSibling;
                 while (after && !shown(after)) after = after.nextElementSibling;
                 let nav = rect(d.getElementById("nav-bar")), box = rect(bar);
-                // The property is -moz-window-dragging; newer Firefox also calls it app-region.
-                let dragging = e => ["-moz-window-dragging", "app-region"]
-                  .map(n => w.getComputedStyle(e).getPropertyValue(n)).join("/");
-                let draggable = e => { for (; e; e = e.parentElement)
-                  if (dragging(e).split("/").includes("drag")) return true;
-                  return false; };
+                // -moz-window-dragging cannot be read back from computed style, so check
+                // what is under the middle of each gap instead: bare toolbar, not a button.
+                let under = x => { let e = d.elementFromPoint(x, nav.top + nav.height / 2);
+                  return e ? (e.id || e.localName) : null; };
                 let res = { nav: nav.width, bar: box.width,
                   gapStart: before ? box.left - rect(before).right : null,
                   gapEnd: after ? rect(after).left - box.right : null,
                   neighbours: [before?.id, after?.id],
-                  drag: draggable(d.getElementById("nav-bar-customization-target")),
-                  dragValues: ["nav-bar", "nav-bar-customization-target", "titlebar", "urlbar-container"]
-                    .map(id => id + "=" + (d.getElementById(id) ? dragging(d.getElementById(id)) : "missing")) };
+                  gapItems: [under(box.left - 40), under(box.right + 40)],
+                  navClass: d.getElementById("nav-bar").className };
                 // While it has focus the pill opens up to a wider bar.
                 w.gURLBar.focus();
                 await sleep(300);
@@ -882,7 +879,8 @@ class Run:
             assert r["bar"] < r["nav"] * 0.5, f"the address bar should be a compact pill: {detail}: {r}"
             assert r["gapStart"] >= 60 and r["gapEnd"] >= 60, f"empty toolbar space either side of the pill: {r}"
             assert abs(r["gapStart"] - r["gapEnd"]) <= 4, f"the pill should be centred between its neighbours: {r}"
-            assert r["drag"], f"the toolbar should drag the window: {r}"
+            bare = {"nav-bar", "nav-bar-customization-target"}
+            assert set(r["gapItems"]) <= bare, f"the toolbar on both sides of the pill should be empty: {r}"
             assert abs(r["closed"] - r["bar"]) <= 2, f"the pill should close again after focus: {r}"
             if r["focused"]:
                 assert r["open"] > r["bar"] + 100, f"the pill should open wider while focused: {r}"
@@ -931,7 +929,11 @@ class Run:
         def popup():
             r = self.js(
                 """
-                let pw = w.open("about:blank", "_blank", "popup,width=480,height=560,left=10,top=10");
+                // As Firefox opens a page's popup: a browser window without a toolbar.
+                let args = Cc["@mozilla.org/supports-string;1"].createInstance(Ci.nsISupportsString);
+                args.data = "about:blank";
+                let pw = Services.ww.openWindow(w, "chrome://browser/content/browser.xhtml", "_blank",
+                  "chrome,dialog=no,location,resizable,width=480,height=560,left=10,top=10", args);
                 // The new window is not scriptable until its browser document loads.
                 await until(() => { try { return pw.gBrowserInit?.delayedStartupFinished; } catch { return false; } }, 20000);
                 await sleep(600);
