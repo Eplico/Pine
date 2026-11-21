@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Prototype running; design under review |
 | **Last updated** | 2026-10-02 |
-| **Base** | Thin patch layer on upstream Firefox, **Release** channel, pinned to 157.0 |
+| **Base** | Thin patch layer on upstream Firefox, **Release** channel, pinned to 160.0.1 |
 | **Platforms** | **Windows first**; Linux and macOS kept buildable |
 | **Repository** | `Eplico/Pine` (the repository keeps its old name; the product is Evergreen) |
 

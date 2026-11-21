@@ -92,6 +92,9 @@ jobs:
         run: |
           args=(--headless --screenshots smoke-screenshots)
           if [ -n "${FIREFOX_DIR:-}" ]; then args+=(--firefox "$FIREFOX_DIR"); fi
+          # Linux job logs carry small screenshots ("EVERGREEN-SHOT <name> data:...")
+          # for runs where artifacts cannot be downloaded.
+          if [ "$RUNNER_OS" = "Linux" ]; then args+=(--log-screenshots); fi
           python tests/smoke/smoke_test.py "${args[@]}"
       - name: Upload screenshots and Firefox log
         if: always()

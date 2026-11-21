@@ -837,6 +837,127 @@ class Run:
             assert 0.60 <= side <= 0.72, detail
             return detail
 
+        def address_bar():
+            r = self.js(
+                """
+                await sleep(300);
+                let d = w.document;
+                let rect = e => e.getBoundingClientRect();
+                let shown = e => e && !e.hidden && rect(e).width > 0;
+                let bar = d.getElementById("urlbar-container");
+                let before = bar.previousElementSibling, after = bar.nextElementSibling;
+                while (before && !shown(before)) before = before.previousElementSibling;
+                while (after && !shown(after)) after = after.nextElementSibling;
+                let nav = rect(d.getElementById("nav-bar")), box = rect(bar);
+                let draggable = e => { for (; e; e = e.parentElement)
+                  if (w.getComputedStyle(e).getPropertyValue("-moz-window-dragging") == "drag") return true;
+                  return false; };
+                let res = { nav: nav.width, bar: box.width,
+                  gapStart: before ? box.left - rect(before).right : null,
+                  gapEnd: after ? rect(after).left - box.right : null,
+                  neighbours: [before?.id, after?.id],
+                  drag: draggable(d.getElementById("nav-bar-customization-target")) };
+                // While it has focus the pill opens up to a wider bar.
+                w.gURLBar.focus();
+                await sleep(300);
+                res.focused = bar.matches(":focus-within");
+                res.open = rect(bar).width;
+                w.gURLBar.blur();
+                w.gURLBar.view?.close?.();
+                await sleep(200);
+                res.closed = rect(bar).width;
+                return res;
+                """
+            )
+            assert r["gapStart"] is not None and r["gapEnd"] is not None, r
+            detail = (f"pill {r['bar']:.0f}px of a {r['nav']:.0f}px toolbar, empty space "
+                      f"{r['gapStart']:.0f}px / {r['gapEnd']:.0f}px either side")
+            assert r["bar"] < r["nav"] * 0.5, f"the address bar should be a compact pill: {detail}: {r}"
+            assert r["gapStart"] >= 60 and r["gapEnd"] >= 60, f"empty toolbar space either side of the pill: {r}"
+            assert abs(r["gapStart"] - r["gapEnd"]) <= 4, f"the pill should be centred between its neighbours: {r}"
+            assert r["drag"], f"the toolbar should drag the window: {r}"
+            assert abs(r["closed"] - r["bar"]) <= 2, f"the pill should close again after focus: {r}"
+            if r["focused"]:
+                assert r["open"] > r["bar"] + 100, f"the pill should open wider while focused: {r}"
+            else:
+                detail += " (no focus in this environment: opening not checked)"
+            self.shot("address-bar")
+            return detail
+
+        def favorites():
+            pages = ["about:robots", "about:logo", "about:rights"]
+            self.js(
+                """
+                for (let url of arguments[0]) {
+                  let opened = nextTabOpen();
+                  w.openTrustedLinkIn(url, "tab");
+                  gB.pinTab(await opened);
+                }
+                await sleep(500);
+                """,
+                pages,
+            )
+            self.shot("favorites")
+            r = self.js(
+                """
+                let tabs = gB.tabs.filter(t => t.pinned);
+                let rect = e => { let b = e.getBoundingClientRect(); return [b.left, b.top, b.width, b.height].map(Math.round); };
+                let icon = tabs.map(t => parseFloat(w.getComputedStyle(t.querySelector(".tab-icon-image")).width));
+                let res = { tiles: tabs.map(rect), sidebar: rect(c.layout.sidebarContainer), icon,
+                  container: rect(w.document.getElementById("pinned-tabs-container")) };
+                for (let t of tabs) gB.unpinTab(t);
+                for (let t of tabs) gB.removeTab(t);
+                await sleep(200);
+                return res;
+                """
+            )
+            assert len(r["tiles"]) == 3, r
+            (l0, t0, w0, h0), (l1, t1, w1, h1), (l2, t2, w2, h2) = r["tiles"]
+            detail = f"tiles {w0}x{h0}px, sidebar {r['sidebar'][2]}px wide"
+            assert t0 == t1 and l1 > l0, f"the first two favorites should share a row: {r}"
+            assert t2 > t0 and l2 == l0, f"the third favorite should start the next row: {r}"
+            assert w0 >= 56 and h0 >= 48, f"favorites should be big tiles: {r}"
+            assert abs(w0 * 2 - r["sidebar"][2]) <= r["sidebar"][2] * 0.2, f"two tiles should span the sidebar: {r}"
+            assert all(i >= 24 for i in r["icon"] if i == i), f"favorites should have big icons: {r}"
+            return detail
+
+        def popup():
+            r = self.js(
+                """
+                let pw = w.open("about:blank", "_blank", "popup,width=480,height=560,left=10,top=10");
+                await until(() => pw.gBrowserInit?.delayedStartupFinished, 20000);
+                await sleep(600);
+                let d = pw.document, root = d.documentElement;
+                let rect = id => { let e = d.getElementById(id); return e ? e.getBoundingClientRect() : null; };
+                let res = {
+                  popupWindow: root.hasAttribute("popup-window"),
+                  styled: root.hasAttribute("evergreen-popup"),
+                  spaces: root.hasAttribute("evergreen") || !!d.getElementById("evergreen-space-header"),
+                  controller: !!EvergreenWindow.controllerFor(pw),
+                  sidebar: rect("sidebar-container")?.width ?? rect("sidebar-main")?.width ?? 0,
+                  readOnly: pw.gURLBar.readOnly,
+                  radius: pw.getComputedStyle(d.getElementById("tabbrowser-tabbox")).borderTopLeftRadius,
+                  bar: rect("urlbar-container")?.width,
+                  centre: [pw.screenX + pw.outerWidth / 2, pw.screenY + pw.outerHeight / 2],
+                  parentCentre: [w.screenX + w.outerWidth / 2, w.screenY + w.outerHeight / 2],
+                  size: [pw.outerWidth, pw.outerHeight],
+                };
+                pw.close();
+                await sleep(300);
+                return res;
+                """
+            )
+            assert r["popupWindow"], f"the test did not open a popup window: {r}"
+            assert r["styled"], f"popups should get Evergreen's look: {r}"
+            assert not r["spaces"] and not r["controller"], f"popups should have no Spaces UI: {r}"
+            assert not r["sidebar"], f"popups should have no sidebar: {r}"
+            assert r["readOnly"], r
+            assert r["radius"] == "10px", f"the page should sit in a rounded frame: {r}"
+            dx = abs(r["centre"][0] - r["parentCentre"][0])
+            dy = abs(r["centre"][1] - r["parentCentre"][1])
+            assert dx <= 3 and dy <= 3, f"the popup should open centred over the window that opened it: {r}"
+            return f"{r['size'][0]}x{r['size'][1]} popup, centred over the window, rounded frame, no sidebar"
+
         def sidebar_collapse():
             r = self.js(
                 """
@@ -1019,6 +1140,9 @@ class Run:
         self.check("private windows stay plain", private_window)
         self.check("toolbar: tree menu, sidebar, Downloads, then navigation at the page edge", toolbar)
         self.check("toolbar about 20% thinner, sidebar about two thirds as wide", sizes)
+        self.check("address bar: a compact centred pill, empty toolbar to drag", address_bar)
+        self.check("Favorites: big tiles, two to a row", favorites)
+        self.check("popup windows: slim header, rounded frame, centred over the opener", popup)
         self.check("sidebar collapses and the left edge reveals it", sidebar_collapse)
         self.check("sidebar keyboard shortcut", sidebar_shortcut)
         self.check("rename a Space by clicking its name", rename)

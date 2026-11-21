@@ -74,7 +74,7 @@ These are the same steps the Windows build workflow runs.
    `eg.py` build command from that shell.
 2. Use a short working directory, because Firefox's tree is deep:
    `export EG_WORK_DIR=/c/eg`
-3. `python eg.py fetch --pin` downloads the Firefox 157.0 source (~600 MB)
+3. `python eg.py fetch --pin` downloads the Firefox 160.0.1 source (~600 MB)
    and verifies it. `SHA512SUMS` must be signed by Mozilla's release key
    **and** a signing subkey pinned in `upstream.json`, and the tarball must
    match it. `--pin` records the verified hash in `upstream.json`: commit it.
@@ -92,7 +92,7 @@ These are the same steps the Windows build workflow runs.
 7. `python eg.py run` starts the built Evergreen.
 8. `python eg.py fetch-extensions --pin` once (pins uBlock Origin), then
    `python eg.py package` builds the portable zip and, from it, the installer
-   (`obj-evergreen\dist\evergreen-157.0.en-US.win64.zip` and
+   (`obj-evergreen\dist\evergreen-160.0.1.en-US.win64.zip` and
    `...win64.installer.exe`). `python eg.py collect --out release` checks the
    zip and copies both to release names (`Evergreen-<VERSION>-win64-…`)
    with `SHA256SUMS.txt`.
@@ -127,6 +127,29 @@ Releases are built by the **Windows build** workflow
    build's run ID (the number in its URL).
 
 The release notes come from `.github/release-notes.md`.
+
+## Building for Linux
+
+The **Linux build** workflow (`.github/workflows/linux-build.yml`) builds
+Evergreen on GitHub's Ubuntu runners. It is started by hand (Actions › Linux
+build › Run workflow) and publishes nothing unless *Publish* is ticked.
+
+1. *build* installs Firefox's build dependencies, fetches and verifies the
+   source (the same signature check as Windows), runs `eg.py prepare
+   --platform linux`, builds, packages and collects
+   `Evergreen-<version>-linux-x86_64-portable.tar.*` with `SHA256SUMS.txt`
+   (uploaded as the *evergreen-linux* artifact).
+2. *test-and-publish* unpacks the tarball, runs the smoke test against
+   `evergreen/evergreen` (headless; screenshots are also printed to the job log
+   as `EVERGREEN-SHOT` lines) and, if asked, publishes a release tagged
+   `v<VERSION>-linux` (kept apart from the Windows release so neither replaces
+   the other as the repository's latest).
+3. `from_run` re-tests or re-publishes an earlier run's package without
+   compiling again, as on Windows.
+
+By hand on Ubuntu or Debian: install the packages listed in the workflow, then
+`python3 eg.py fetch`, `prepare`, `fetch-extensions --pin`, `build`, `package`
+and `collect --platform linux --out release`. Rust must be installed (rustup).
 
 ## Moving to a new Firefox release
 

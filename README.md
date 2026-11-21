@@ -10,12 +10,13 @@ default prefs, Evergreen's own UI code and a small, documented set of patches
 Firefox security release quickly. Evergreen runs no servers; everything it adds
 lives on your device.
 
-**Status:** an early preview (0.1.x), built on Firefox 157.0. Spaces
-(with optional separate sign-ins), Favorites, kept tabs, auto-archive, a
+**Status:** an early preview (0.2), built on Firefox 160.0.1. Spaces
+(with optional separate sign-ins), big Favorites tiles, kept tabs, auto-archive, a
+compact Arc-style address bar, Arc-style popup windows, a
 start page and an Arc-style new-tab search box, hardened defaults and Ecosia
 as the default search engine work, and pass an end-to-end test both in the
 built Evergreen and through the dev harness in Firefox 136 and 156. Windows
-is the first platform.
+is the first platform; Linux (x86-64) has its own build workflow (below).
 
 ## Download (Windows)
 

@@ -10,12 +10,13 @@ Owner: Evergreen maintainers
 
 --- a/browser/installer/windows/Makefile.in
 +++ b/browser/installer/windows/Makefile.in
-@@ -8,7 +8,7 @@
- ifeq ($(TARGET_CPU), aarch64)
- SFX_MODULE = $(topsrcdir)/other-licenses/7zstub/firefox/7zSD.ARM64.sfx
- else
--SFX_MODULE = $(topsrcdir)/other-licenses/7zstub/firefox/7zSD.Win32.sfx
-+SFX_MODULE = $(topsrcdir)/$(MOZ_BRANDING_DIRECTORY)/7zSD.Win32.sfx
- endif
+@@ -9,6 +9,9 @@ CONFIG_DIR = instgen
+ include $(topsrcdir)/config/config.mk
  
- INSTALLER_FILES = \
+ SFX_MODULE = $(topsrcdir)/$(NSIS_SFX_MODULE)
++ifneq ($(TARGET_CPU), aarch64)
++SFX_MODULE = $(topsrcdir)/$(MOZ_BRANDING_DIRECTORY)/7zSD.Win32.sfx
++endif
+ INSTALLER_FILES = $(NSIS_INSTALLER_FILES)
+ BRANDING_FILES = $(NSIS_BRANDING_FILES)
+ 

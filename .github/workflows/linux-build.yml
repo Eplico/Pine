@@ -1,0 +1,208 @@
+# Builds Evergreen for Linux (x86-64) from the pinned Firefox source and
+# packages it as a portable tarball: unpack it anywhere and run
+# `evergreen/evergreen`.
+#
+# Runs on GitHub's Ubuntu runners (no Evergreen servers involved). A build
+# from scratch takes a few hours; sccache makes later builds faster.
+#
+# Two jobs, like the Windows build: `build` compiles and packages, then
+# uploads the package; `test-and-publish` smoke-tests the packaged browser and
+# (only when asked) publishes it. To re-test or re-publish an earlier build
+# without compiling again, run the workflow with `from_run` set to that run's
+# ID. Nothing is published unless *Publish* is ticked.
+name: Linux build
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a GitHub release when the build and smoke test pass"
+        type: boolean
+        default: false
+      from_run:
+        description: "Skip the build: test and publish the package of this earlier run ID"
+        required: false
+        default: ""
+
+permissions:
+  contents: write  # to publish releases
+  actions: read    # to download the package from an earlier run (from_run)
+
+concurrency:
+  group: linux-build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  EG_WORK_DIR: /home/runner/eg
+
+jobs:
+  build:
+    name: Build Evergreen for Linux
+    if: ${{ !inputs.from_run }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    env:
+      EG_EXTRA_MOZCONFIG: ${{ github.workspace }}/mozconfigs/ci.mozconfig
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Release version
+        run: |
+          version=$(tr -d '[:space:]' < VERSION)
+          firefox=$(python3 -c "import json; print(json.load(open('upstream.json'))['firefox']['version'])")
+          echo "Evergreen $version, built on Firefox $firefox"
+
+      - name: Free disk space
+        run: |
+          # A Firefox build needs about 30 GB; the runner image carries
+          # toolchains this build does not use.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /usr/share/swift
+          df -h /
+          nproc
+          free -g
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: System packages for building Firefox
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libpython3-dev m4 unzip uuid zip curl git gnupg \
+            libasound2-dev libcurl4-openssl-dev libdbus-1-dev libdbus-glib-1-dev \
+            libdrm-dev libgtk-3-dev libpulse-dev libx11-xcb-dev libxt-dev xvfb
+
+      - name: Rust (the runner's, brought up to date)
+        run: |
+          rustup update stable --no-self-update
+          rustc --version
+          cargo --version
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Fetch and verify the Firefox source
+        run: python eg.py fetch
+
+      - name: Prepare the Evergreen source tree
+        run: python eg.py prepare --platform linux
+
+      - name: Fetch uBlock Origin (bundled)
+        run: python eg.py fetch-extensions --pin
+
+      # The first build downloads Mozilla's own toolchains (clang, the sysroot,
+      # nasm, node, cbindgen...) because of --enable-bootstrap.
+      - name: Build
+        run: python eg.py build
+
+      - name: Package (portable tarball)
+        run: python eg.py package
+
+      - name: Collect release files
+        run: python eg.py collect --platform linux --out release
+
+      - name: Upload release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: evergreen-linux
+          path: release/
+          if-no-files-found: error
+
+      - name: Gather diagnostics
+        if: always()
+        run: |
+          mkdir -p diagnostics
+          tree=$(ls -d "$EG_WORK_DIR"/src/firefox-* 2>/dev/null | head -1)
+          if [ -n "$tree" ]; then
+            cp "$tree/mozconfig" diagnostics/ 2>/dev/null || true
+            cp "$tree/obj-evergreen/config.log" diagnostics/ 2>/dev/null || true
+            ls -l "$tree/obj-evergreen/dist" > diagnostics/dist-listing.txt 2>/dev/null || true
+          fi
+          df -h / > diagnostics/disk.txt
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build-diagnostics
+          path: diagnostics/
+          if-no-files-found: ignore
+
+  test-and-publish:
+    name: Smoke test and publish
+    needs: build
+    if: ${{ always() && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.from_run != '')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Libraries a browser needs to start
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb libgtk-3-0t64 libdbus-glib-1-2 libasound2t64 libx11-xcb1 libxtst6 libpulse0
+
+      - name: Download the package
+        uses: actions/download-artifact@v4
+        with:
+          name: evergreen-linux
+          path: release
+          run-id: ${{ inputs.from_run || github.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Smoke test the packaged browser
+        run: |
+          ls -l release
+          archive=$(ls release/*-portable.tar.* | head -1)
+          mkdir -p "$EG_WORK_DIR/pkg"
+          tar -xf "$archive" -C "$EG_WORK_DIR/pkg"
+          bin="$EG_WORK_DIR/pkg/evergreen/evergreen"
+          test -x "$bin" || { ls "$EG_WORK_DIR/pkg"; echo "evergreen/evergreen is not in $archive"; exit 1; }
+          echo "Bundled extensions:"
+          ls "$EG_WORK_DIR/pkg/evergreen/distribution/extensions" || true
+          python tests/smoke/smoke_test.py --binary "$bin" --headless --screenshots "$EG_WORK_DIR/dev/screenshots" --log-screenshots
+
+      - name: Upload smoke-test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-smoke-diagnostics
+          path: |
+            /home/runner/eg/dev/screenshots/
+            /home/runner/eg/dev/smoke-firefox.log
+          if-no-files-found: ignore
+
+      - name: Publish GitHub release
+        if: success() && inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FROM_RUN: ${{ inputs.from_run }}
+        run: |
+          version=$(tr -d '[:space:]' < VERSION)
+          firefox=$(python3 -c "import json; print(json.load(open('upstream.json'))['firefox']['version'])")
+          if ! ls release/Evergreen-$version-linux-x86_64-portable.tar.* >/dev/null 2>&1; then
+            echo "The package is not Evergreen $version's (VERSION changed since that build?)"; exit 1
+          fi
+          sha=$GITHUB_SHA
+          run_id=$GITHUB_RUN_ID
+          if [ -n "$FROM_RUN" ]; then
+            sha=$(gh run view "$FROM_RUN" --repo "$GITHUB_REPOSITORY" --json headSha --jq .headSha)
+            run_id=$FROM_RUN
+          fi
+          sed -e "s|@VERSION@|$version|g" -e "s|@FIREFOX@|$firefox|g" -e "s|@SHA@|$sha|g" \
+              -e "s|@REPO_URL@|$GITHUB_SERVER_URL/$GITHUB_REPOSITORY|g" \
+              -e "s|@RUN_URL@|$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$run_id|g" \
+              .github/release-notes-linux.md > release-notes.md
+          # The notes end with the checksums.
+          { echo '```'; cat release/SHA256SUMS.txt; echo '```'; } >> release-notes.md
+          # Its own release (tag v<VERSION>-linux), so it never replaces the
+          # Windows release as the repository's latest.
+          gh release create "v$version-linux" release/* --title "Evergreen $version for Linux" \
+            --notes-file release-notes.md --target "$sha" --latest=false

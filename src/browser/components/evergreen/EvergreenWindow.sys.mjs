@@ -25,7 +25,7 @@ import * as Spaces from "./Spaces.sys.mjs";
 import { isArchivable, isRecordable, makeEntry } from "./Archive.sys.mjs";
 import { ArchiveStore, archiveSettings } from "./ArchiveStore.sys.mjs";
 import { SpacesStore } from "./SpacesStore.sys.mjs";
-import { WindowLayout, applyToolbarLayout } from "./EvergreenLayout.sys.mjs";
+import { WindowLayout, applyToolbarLayout, centerPopup } from "./EvergreenLayout.sys.mjs";
 import { SearchBar, isStartPage } from "./EvergreenSearch.sys.mjs";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
@@ -57,11 +57,38 @@ const CONTAINER_COLORS = {
 };
 
 const controllers = new Set();
+const popups = new Map(); // window -> its cleanup
+
+/**
+ * A popup window (window.open with a size: a sign-in, a payment page): one
+ * page, no tab list. It has no Spaces; it gets Evergreen's toolbar and frame
+ * (evergreen.css, `evergreen-popup`) and opens centred over the window that
+ * opened it, as in Arc.
+ */
+function startPopup(win) {
+  let { windowUtils, document: doc } = win;
+  windowUtils.loadSheetUsingURIString(STYLESHEET, windowUtils.AUTHOR_SHEET);
+  doc.documentElement.setAttribute("evergreen-popup", "true");
+  popups.set(win, () => {
+    windowUtils.removeSheetUsingURIString(STYLESHEET, windowUtils.AUTHOR_SHEET);
+    doc.documentElement.removeAttribute("evergreen-popup");
+  });
+  try {
+    centerPopup(win);
+  } catch (e) {
+    console.error("Evergreen popup placement", e);
+  }
+}
 
 export const EvergreenWindow = {
   /** Category entry point: browser-window-delayed-startup. */
   init(win) {
-    if (!win.gBrowser || [...controllers].some(c => c.win == win)) {
+    if (!win.gBrowser || popups.has(win) || [...controllers].some(c => c.win == win)) {
+      return;
+    }
+    // Firefox marks windows without a toolbar (popups) before they are shown.
+    if (win.document.documentElement.hasAttribute("popup-window")) {
+      startPopup(win);
       return;
     }
     let isPrivate = win.PrivateBrowsingUtils
@@ -78,6 +105,8 @@ export const EvergreenWindow = {
 
   /** Category entry point: browser-window-unload. */
   uninit(win) {
+    popups.get(win)?.();
+    popups.delete(win);
     for (let c of controllers) {
       if (c.win == win) {
         c.stop();

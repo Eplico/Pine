@@ -57,6 +57,64 @@ export function applyToolbarLayout(CustomizableUI) {
   front.forEach((id, index) => CustomizableUI.moveWidgetWithinArea(id, index));
 }
 
+/**
+ * Where to put a popup of `size` so that it is centred over `parent`, kept
+ * inside `area` (the screen's usable part). All three are { x, y, width,
+ * height }. A popup bigger than the area is put at the area's top left.
+ */
+export function centeredPosition(parent, size, area) {
+  let place = (parentStart, parentLength, length, areaStart, areaLength) => {
+    let wanted = parentStart + (parentLength - length) / 2;
+    return Math.round(Math.max(areaStart, Math.min(wanted, areaStart + areaLength - length)));
+  };
+  return {
+    x: place(parent.x, parent.width, size.width, area.x, area.width),
+    y: place(parent.y, parent.height, size.height, area.y, area.height),
+  };
+}
+
+/**
+ * The browser window a popup was opened from, or null: the window of the
+ * page that called window.open(), else the most recent ordinary window.
+ */
+export function openerWindowOf(win) {
+  try {
+    let opener = win.gBrowser?.selectedBrowser?.browsingContext?.opener;
+    let parent = opener?.top?.embedderElement?.ownerGlobal;
+    if (parent && parent != win && !parent.closed && parent.gBrowser) {
+      return parent;
+    }
+  } catch {
+    // No opener (window.open with noopener, or opened by the browser).
+  }
+  try {
+    let { BrowserWindowTracker } = ChromeUtils.importESModule(
+      "resource:///modules/BrowserWindowTracker.sys.mjs"
+    );
+    let top = BrowserWindowTracker.getTopWindow({ allowPopups: false });
+    return top && top != win ? top : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Centre a popup window over the window it was opened from (as Arc does). */
+export function centerPopup(win) {
+  let parent = openerWindowOf(win);
+  if (!parent || parent.windowState == parent.STATE_MINIMIZED) {
+    return;
+  }
+  let { screen } = win;
+  let spot = centeredPosition(
+    { x: parent.screenX, y: parent.screenY, width: parent.outerWidth, height: parent.outerHeight },
+    { width: win.outerWidth, height: win.outerHeight },
+    { x: screen.availLeft, y: screen.availTop, width: screen.availWidth, height: screen.availHeight }
+  );
+  if (Number.isFinite(spot.x) && Number.isFinite(spot.y)) {
+    win.moveTo(spot.x, spot.y);
+  }
+}
+
 export class WindowLayout {
   constructor(win) {
     this.win = win;

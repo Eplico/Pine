@@ -18,7 +18,9 @@ Get-FileHash .\Evergreen-@VERSION@-win64-setup.exe -Algorithm SHA256
 
 - A **start page** in the Space's colour with a search box under "Evergreen", shown when a Space has no tabs: when Evergreen starts with nothing to restore, and when you close the last tab (the window stays open). It is not a tab in the list. **New tab** (`Ctrl+T` or the + button) opens a search box over the page, as in Arc: type and press Enter to open a new tab, or Escape to cancel. Both search with your default search engine and suggest pages from your history and bookmarks.
 - **New tabs open at the top** of the tab list.
-- Arc-style **Spaces** in the vertical-tab sidebar, optionally with **separate sign-ins** (each Space in its own container), **Favorites** (pinned tabs), **Keep in Space**, and an **Archive** for tabs unused for 12 hours. Click a Space's name to rename it.
+- Arc-style **Spaces** in the vertical-tab sidebar, optionally with **separate sign-ins** (each Space in its own container), **Favorites** (pinned tabs, shown as big tiles two to a row at the top of the sidebar), **Keep in Space**, and an **Archive** for tabs unused for 12 hours. Click a Space's name to rename it.
+- A compact **address bar** in the middle of the toolbar, as in Arc, with empty toolbar on both sides to drag the window by. It opens up to a wider bar while you type.
+- **Popup windows** (sign-in and payment windows that a page opens) get a slim header with a centred address pill and a rounded frame, and open centred over the window that opened them.
 - **Hide the sidebar** with the sidebar button next to the tree menu (or `Ctrl+Alt+Z`); move the mouse to the left edge of the window to slide it back in over the page. It slides away as soon as the mouse leaves.
 - Installs add-ons from **addons.mozilla.org** like Firefox. Evergreen tells websites it is Firefox (the same User-Agent), so sites treat it as Firefox and it does not stand out.
 - On first run, Evergreen offers to **import** bookmarks, passwords and history from another browser on your computer.

@@ -1,6 +1,6 @@
 {
   "firefox": {
-    "version": "157.0",
+    "version": "160.0.1",
     "sha512": null
   },
   "archive": "https://archive.mozilla.org/pub/firefox/releases/",
