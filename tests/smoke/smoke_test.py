@@ -851,14 +851,19 @@ class Run:
                 while (before && !shown(before)) before = before.previousElementSibling;
                 while (after && !shown(after)) after = after.nextElementSibling;
                 let nav = rect(d.getElementById("nav-bar")), box = rect(bar);
+                // The property is -moz-window-dragging; newer Firefox also calls it app-region.
+                let dragging = e => ["-moz-window-dragging", "app-region"]
+                  .map(n => w.getComputedStyle(e).getPropertyValue(n)).join("/");
                 let draggable = e => { for (; e; e = e.parentElement)
-                  if (w.getComputedStyle(e).getPropertyValue("-moz-window-dragging") == "drag") return true;
+                  if (dragging(e).split("/").includes("drag")) return true;
                   return false; };
                 let res = { nav: nav.width, bar: box.width,
                   gapStart: before ? box.left - rect(before).right : null,
                   gapEnd: after ? rect(after).left - box.right : null,
                   neighbours: [before?.id, after?.id],
-                  drag: draggable(d.getElementById("nav-bar-customization-target")) };
+                  drag: draggable(d.getElementById("nav-bar-customization-target")),
+                  dragValues: ["nav-bar", "nav-bar-customization-target", "titlebar", "urlbar-container"]
+                    .map(id => id + "=" + (d.getElementById(id) ? dragging(d.getElementById(id)) : "missing")) };
                 // While it has focus the pill opens up to a wider bar.
                 w.gURLBar.focus();
                 await sleep(300);
@@ -927,7 +932,8 @@ class Run:
             r = self.js(
                 """
                 let pw = w.open("about:blank", "_blank", "popup,width=480,height=560,left=10,top=10");
-                await until(() => pw.gBrowserInit?.delayedStartupFinished, 20000);
+                // The new window is not scriptable until its browser document loads.
+                await until(() => { try { return pw.gBrowserInit?.delayedStartupFinished; } catch { return false; } }, 20000);
                 await sleep(600);
                 let d = pw.document, root = d.documentElement;
                 let rect = id => { let e = d.getElementById(id); return e ? e.getBoundingClientRect() : null; };

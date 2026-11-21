@@ -19,6 +19,8 @@
  * Evergreen keeps it expanded and moves it out of the layout while collapsed.
  */
 
+import { importBrowserModule } from "./FirefoxModules.sys.mjs";
+
 const COLLAPSED_PREF = "evergreen.sidebar.collapsed"; // last choice, for new windows
 const WINDOW_COLLAPSED = "evergreen-sidebar-collapsed"; // SessionStore window value
 // Just long enough to forgive a mouse that grazes the edge on its way past.
@@ -88,9 +90,7 @@ export function openerWindowOf(win) {
     // No opener (window.open with noopener, or opened by the browser).
   }
   try {
-    let { BrowserWindowTracker } = ChromeUtils.importESModule(
-      "resource:///modules/BrowserWindowTracker.sys.mjs"
-    );
+    let { BrowserWindowTracker } = importBrowserModule("browser/modules", "BrowserWindowTracker");
     let top = BrowserWindowTracker.getTopWindow({ allowPopups: false });
     return top && top != win ? top : null;
   } catch {

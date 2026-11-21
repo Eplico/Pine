@@ -17,6 +17,7 @@ MOZ_SRC_FILES += [
     "EvergreenSearch.sys.mjs",
     "EvergreenStartup.sys.mjs",
     "EvergreenWindow.sys.mjs",
+    "FirefoxModules.sys.mjs",
     "SearchDefaults.sys.mjs",
     "Spaces.sys.mjs",
     "SpacesStore.sys.mjs",

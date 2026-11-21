@@ -14,6 +14,7 @@ import { ArchiveStore } from "./ArchiveStore.sys.mjs";
 import { applyDefaultSearch, getSearchService, reconcileDefaultSearch } from "./SearchDefaults.sys.mjs";
 import { SpacesStore } from "./SpacesStore.sys.mjs";
 import { EvergreenWindow } from "./EvergreenWindow.sys.mjs";
+import { importBrowserModule } from "./FirefoxModules.sys.mjs";
 
 export { getSearchService };
 
@@ -119,9 +120,7 @@ export const EvergreenStartup = {
    * @returns {Promise<"opened" | "nothing-found">}
    */
   async offerImport() {
-    let { MigrationUtils } = ChromeUtils.importESModule(
-      "resource:///modules/MigrationUtils.sys.mjs"
-    );
+    let { MigrationUtils } = importBrowserModule("browser/components/migration", "MigrationUtils");
     let found = false;
     for (let key of MigrationUtils.availableMigratorKeys) {
       if (await MigrationUtils.getMigrator(key)) {
