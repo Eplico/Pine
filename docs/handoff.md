@@ -1,8 +1,9 @@
 # Evergreen: handoff
 
-Written 2026-11-21. It describes the state of the branch
-`claude/determined-cerf-v1dp7l` at commit `4fe2d8b` and the published
-release **v0.1.1**. Read this first, then [design.md](design.md) (the why)
+Written 2026-11-21, updated the same day. It describes the state of the branch
+`claude/determined-cerf-v1dp7l` (Evergreen **0.2**, on Firefox **160.0.1**, not
+yet released) and the published release **v0.1.1**. See "Update, 0.2" below
+for what changed since the first version of this document. Read this first, then [design.md](design.md) (the why)
 and [development.md](development.md) (the how).
 
 ## In one paragraph
@@ -28,7 +29,41 @@ product is **Evergreen**.
 | Design | `docs/design.md`: goals, threat model, architecture, features, decisions (Q1–Q11), milestones |
 | Developer guide | `docs/development.md`: dev harness, tests, building on Windows, patches, releasing |
 
-## Current state
+## Update, 0.2 (unreleased)
+
+Done in a later session, all on this branch:
+
+- **Firefox 157.0 → 160.0.1** (`upstream.json`). Only patch 0003 needed
+  rebasing: upstream moved the installer stub path into `browser/moz.configure`
+  (`NSIS_SFX_MODULE`), so 0003 now overrides `SFX_MODULE` in
+  `browser/installer/windows/Makefile.in` for non-ARM builds. The sidebar width
+  calculation uses the renamed `--tab-container-margin-inline-pinned-expanded`.
+  `check-patches` and `check-prefs` pass against 160.0.1. **The Windows build
+  has not been run on 160.0.1 yet.**
+- **Address bar** is a compact pill (`--evergreen-urlbar-width`) centred between
+  the navigation buttons and the extensions, as in Arc; the empty toolbar on
+  both sides drags the window. It opens to `--evergreen-urlbar-width-open` while
+  focused. CSS only (`evergreen.css`, "The address bar").
+- **Favorites** (pinned tabs) are big tiles, two to a row (`evergreen.css`,
+  "Favorites"). Pure CSS on Firefox's pinned-tab grid; it leans on
+  `#pinned-tabs-container::part(items-wrapper)` and `--icon-size`, so check it
+  on every Firefox bump.
+- **Popup windows** (`window.open` with a size; Firefox sets `popup-window` on
+  the root): `EvergreenWindow.startPopup` gives them `evergreen-popup`, the
+  toolbar and rounded frame, no Spaces and no sidebar, and centres them over
+  the opener (`centerPopup` in `EvergreenLayout.sys.mjs`, tested by
+  `tests/unit/layout.test.mjs`). The "mini window" and Peek (M2) are separate and
+  still not done; Firefox 160 now has its own `mini-window` mode to build on.
+- **Linux build**: `.github/workflows/linux-build.yml` (Actions › Linux build ›
+  Run workflow). It builds on `ubuntu-24.04`, packages
+  `Evergreen-<VERSION>-linux-x86_64-portable.tar.*`, smoke-tests the packaged
+  browser headless, and publishes (tag `v<VERSION>-linux`, not "latest") only
+  with *Publish* ticked. See development.md, "Building for Linux".
+- Smoke checks for the pill, the Favorites tiles and popups; the Linux CI smoke
+  job prints screenshots into its log as `EVERGREEN-SHOT <name> data:image/jpeg;base64,...`
+  lines (decode them to see the UI when artifacts can't be downloaded).
+
+## Current state (v0.1.1, as released)
 
 **Released, v0.1.1** (built on Firefox 157.0, run 37249999440):
 
