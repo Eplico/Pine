@@ -179,7 +179,9 @@ class Run:
     def launch(self):
         cmd = [str(self.binary), "-profile", str(self.profile), "-no-remote",
                "--marionette", "-remote-allow-system-access"]
-        env = dict(os.environ, MOZ_CRASHREPORTER_DISABLE="1")
+        # Firefox 160 only allows Marionette's chrome context (system access)
+        # when this variable is set; older versions take the flag above.
+        env = dict(os.environ, MOZ_CRASHREPORTER_DISABLE="1", MOZ_REMOTE_ALLOW_SYSTEM_ACCESS="1")
         if self.args.headless:
             cmd.append("-headless")
             env.update(MOZ_HEADLESS_WIDTH="1400", MOZ_HEADLESS_HEIGHT="900")
