@@ -36,6 +36,8 @@ const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   AppConstants: "resource://gre/modules/AppConstants.sys.mjs",
   Subprocess: "resource://gre/modules/Subprocess.sys.mjs",
+  setTimeout: "resource://gre/modules/Timer.sys.mjs",
+  clearTimeout: "resource://gre/modules/Timer.sys.mjs",
 });
 
 async function readAll(pipe) {
@@ -117,16 +119,23 @@ export const EvergreenUpdate = {
   },
 
   async _latest() {
-    let response = await fetch(Services.prefs.getStringPref(PREF_URL), {
-      credentials: "omit",
-      cache: "no-store",
-      headers: { Accept: "application/vnd.github+json" },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+    // (AbortSignal.timeout needs a window, which a system module has not got.)
+    let controller = new AbortController();
+    let timer = lazy.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      let response = await fetch(Services.prefs.getStringPref(PREF_URL), {
+        credentials: "omit",
+        cache: "no-store",
+        headers: { Accept: "application/vnd.github+json" },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return newestRelease(await response.json(), lazy.AppConstants.platform);
+    } finally {
+      lazy.clearTimeout(timer);
     }
-    return newestRelease(await response.json(), lazy.AppConstants.platform);
   },
 
   // --- the notice ----------------------------------------------------------
