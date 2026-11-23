@@ -126,6 +126,123 @@ class PageServer:
         return f"http://127.0.0.1:{self.port}/{page}.html"
 
 
+class DownloadServer:
+    """A file server for the accelerated-download checks, on 127.0.0.1.
+
+    Files (all application/octet-stream attachments, each `size` bytes of the
+    same repeatable pseudo-random data, throttled per connection so that
+    connections overlap):
+      /big.bin     byte ranges, 24 MiB
+      /pause.bin   byte ranges, 32 MiB, slower (the pause and resume check)
+      /flaky.bin   byte ranges, but the first few ranged requests are cut short
+      /norange.bin no Accept-Ranges
+      /lie.bin     says it accepts ranges, then answers a range request with the whole file
+      /small.bin   byte ranges, 1 MiB
+    Counters per path: ranged requests seen, most at once, requests cut short.
+    """
+
+    MiB = 1024 * 1024
+    FILES = {
+        "/big.bin": dict(size=24 * MiB, delay=0.008),
+        "/pause.bin": dict(size=32 * MiB, delay=0.02),
+        "/flaky.bin": dict(size=24 * MiB, delay=0.008, cut=3),
+        "/norange.bin": dict(size=12 * MiB, delay=0.002, ranges=False),
+        "/lie.bin": dict(size=12 * MiB, delay=0.002, lie=True),
+        "/small.bin": dict(size=1 * MiB, delay=0),
+    }
+    CHUNK = 64 * 1024
+
+    def __init__(self):
+        import hashlib
+        import random
+
+        self.data = random.Random(20260123).randbytes(32 * self.MiB)
+        self.sha = {p: hashlib.sha256(self.data[: f["size"]]).hexdigest() for p, f in self.FILES.items()}
+        self.lock = threading.Lock()
+        self.reset()
+        server = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                f = server.FILES.get(self.path.split("?")[0])
+                if f is None:
+                    self.send_error(404)
+                    return
+                server.serve(self, self.path.split("?")[0], f)
+
+            def log_message(self, *args):
+                pass
+
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def reset(self):
+        with self.lock:
+            self.stats = {p: dict(requests=0, ranged=[], active=0, peak=0, cut=0) for p in self.FILES}
+
+    def url(self, path: str) -> str:
+        return f"http://127.0.0.1:{self.port}{path}"
+
+    def serve(self, h, path, f):
+        size = f["size"]
+        st = self.stats[path]
+        start, end = 0, size - 1
+        ranged = False
+        rng = h.headers.get("Range")
+        if rng and f.get("ranges", True):
+            m = re.fullmatch(r"bytes=(\d+)-(\d*)", rng.strip())
+            if m:
+                start = int(m.group(1))
+                end = min(int(m.group(2)) if m.group(2) else size - 1, size - 1)
+                ranged = not f.get("lie")
+                if f.get("lie"):
+                    start, end = 0, size - 1
+        # A changed validator means: send the whole file.
+        if ranged and h.headers.get("If-Range") not in (None, '"v1"'):
+            start, end, ranged = 0, size - 1, False
+        with self.lock:
+            st["requests"] += 1
+            if rng:
+                st["ranged"].append(rng)
+            if ranged:
+                st["active"] += 1
+                st["peak"] = max(st["peak"], st["active"])
+            cut = ranged and start > 0 and st["cut"] < f.get("cut", 0)
+            if cut:
+                st["cut"] += 1
+        try:
+            length = end - start + 1
+            h.send_response(206 if ranged else 200)
+            h.send_header("Content-Type", "application/octet-stream")
+            h.send_header("Content-Disposition", f'attachment; filename="{path[1:]}"')
+            h.send_header("ETag", '"v1"')
+            if f.get("ranges", True):
+                h.send_header("Accept-Ranges", "bytes")
+            if ranged:
+                h.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            h.send_header("Content-Length", str(length))
+            h.end_headers()
+            sent = 0
+            while sent < length:
+                n = min(self.CHUNK, length - sent)
+                h.wfile.write(self.data[start + sent : start + sent + n])
+                sent += n
+                if cut and sent >= self.MiB:
+                    h.close_connection = True
+                    h.wfile.flush()
+                    h.connection.shutdown(socket.SHUT_RDWR)
+                    return
+                if f["delay"]:
+                    time.sleep(f["delay"])
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            if ranged:
+                with self.lock:
+                    st["active"] -= 1
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -195,6 +312,7 @@ class Run:
             encoding="utf-8",
         )
         self.server = PageServer()
+        self.files = DownloadServer()
         self.proc = None
         self.m = None
 
@@ -1230,6 +1348,104 @@ class Run:
             assert r["onlyNewer"] is None and r["none"] is None, r
             return "offers the bigger earlier profile; skips one a newer build used"
 
+        def accelerated_downloads():
+            dl_dir = str(egdev.dev_root() / "smoke-downloads")
+            shutil.rmtree(dl_dir, ignore_errors=True)
+            os.makedirs(dl_dir)
+            fetch = """
+              let [url, dir, enabled, pauseAt] = arguments;
+              let { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
+              let { EvergreenDownloads } = ChromeUtils.importESModule("@BASE@EvergreenDownloads.sys.mjs");
+              let P = Services.prefs;
+              P.setIntPref("browser.download.folderList", 2);
+              P.setStringPref("browser.download.dir", dir);
+              P.setBoolPref("browser.download.useDownloadDir", true);
+              P.setBoolPref("browser.download.always_ask_before_handling_new_types", false);
+              P.setBoolPref("evergreen.downloads.enabled", enabled);
+              P.setBoolPref("evergreen.downloads.log", true);
+              let list = await Downloads.getList(Downloads.ALL);
+              for (let d of await list.getAll()) { await list.remove(d); }
+              EvergreenDownloads.events.length = 0;
+              w.saveURL(url, null, null, true, true, null, null, null, false,
+                        Services.scriptSecurityManager.getSystemPrincipal());
+              let dl = await until(async () => (await list.getAll()).find(d => d.source.url == url), 20000);
+              let out = { paused: false };
+              if (pauseAt) {
+                await until(() => dl.currentBytes >= pauseAt || dl.succeeded, 30000);
+                await dl.cancel();
+                out.paused = !dl.succeeded;
+                out.bytesAtPause = dl.currentBytes;
+                out.partial = dl.hasPartialData;
+                await sleep(500);
+                dl.start().catch(() => {});
+              }
+              await until(() => dl.succeeded || dl.error, 90000);
+              out.succeeded = dl.succeeded;
+              out.error = dl.error ? String(dl.error.message || dl.error) : null;
+              out.path = dl.target.path;
+              out.partLeft = dl.target.partFilePath ? await IOUtils.exists(dl.target.partFilePath) : false;
+              out.sha = dl.succeeded ? await IOUtils.computeHexDigest(dl.target.path, "sha256") : null;
+              out.size = dl.succeeded ? (await IOUtils.stat(dl.target.path)).size : null;
+              out.events = EvergreenDownloads.events.map(e => e.action + (e.reason ? ":" + e.reason : ""));
+              P.clearUserPref("evergreen.downloads.enabled");
+              return out;
+            """
+
+            def get(path, enabled=True, pause_at=0):
+                self.files.reset()
+                r = self.js(fetch, self.files.url(path), dl_dir, enabled, pause_at)
+                r["server"] = self.files.stats[path]
+                return r
+
+            def same_file(path, r):
+                assert r["succeeded"], (path, r)
+                assert r["sha"] == self.files.sha[path], f"{path}: wrong content, {r}"
+                assert r["size"] == self.files.FILES[path]["size"], (path, r)
+                assert not r["partLeft"], (path, r)
+
+            out = []
+            # 1. A big file is taken over and arrives on several connections.
+            r = get("/big.bin")
+            same_file("/big.bin", r)
+            assert "segmented" in r["events"], r
+            assert r["server"]["peak"] >= 3, f"expected several connections at once: {r}"
+            out.append(f"big.bin on {r['server']['peak']} connections")
+
+            # 2. Connections cut short are retried from where they stopped.
+            r = get("/flaky.bin")
+            same_file("/flaky.bin", r)
+            assert r["server"]["cut"] >= 1, r
+            out.append(f"flaky.bin survived {r['server']['cut']} cut connections")
+
+            # 3. Pause, then resume: the rest is fetched, not everything again.
+            r = get("/pause.bin", pause_at=4 * 1024 * 1024)
+            same_file("/pause.bin", r)
+            assert r["paused"] and r["partial"], r
+            assert "resume" in r["events"], r
+            out.append("pause and resume")
+
+            # 4. Not splittable: left to Firefox, still arrives intact.
+            for path, why in (("/norange.bin", "no byte ranges"), ("/small.bin", "small or unknown size")):
+                r = get(path)
+                same_file(path, r)
+                assert f"left:{why}" in r["events"], (path, r)
+                assert not r["server"]["ranged"], (path, r)
+            out.append("left alone when it cannot be split")
+
+            # 5. A server that lies about ranges: Firefox downloads it instead.
+            r = get("/lie.bin")
+            same_file("/lie.bin", r)
+            assert any(e.startswith("fallback:") for e in r["events"]), r
+            out.append("falls back when the server ignores ranges")
+
+            # 6. Switched off: Firefox's own downloader, no range requests.
+            r = get("/big.bin", enabled=False)
+            same_file("/big.bin", r)
+            assert not r["server"]["ranged"] and "segmented" not in r["events"], r
+            out.append("off switch")
+            return "; ".join(out)
+
+
         def console_errors():
             r = self.errors_before_restart + self.js("return evergreenConsoleErrors();")
             assert not r, "\n  " + "\n  ".join(r)
@@ -1265,6 +1481,7 @@ class Run:
         self.check("an empty Space shows the start page, with no tab", empty_space)
         self.check("newer release: a notice with an update button", update_notice)
         self.check("new installation: offers the earlier profile with more data", profile_adoption)
+        self.check("accelerated downloads: several connections, retries, resume, fallbacks", accelerated_downloads)
         self.check("no Evergreen errors in the console", console_errors)
         self.quit()
         print(f"\n{len(self.failures)} failed" if self.failures else "\nAll checks passed")

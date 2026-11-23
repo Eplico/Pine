@@ -125,3 +125,13 @@ pref("evergreen.update.check", true);
 pref("evergreen.update.url", "https://api.github.com/repos/Eplico/Pine/releases?per_page=30");
 // On the first run of a new installation folder, offer the earlier profile.
 pref("evergreen.firstrun.profilePrompt", true);
+
+// --- Accelerated downloads -------------------------------------------------------
+// Large downloads use several connections at once and can resume (see
+// docs/download-manager.md). Off: Firefox's own downloader, as before.
+pref("evergreen.downloads.enabled", true);
+pref("evergreen.downloads.connections", 6);   // per download, 1 to 16
+pref("evergreen.downloads.minSizeMB", 8);     // smaller files are left to Firefox
+pref("evergreen.downloads.maxSizeGB", 64);    // larger files are left to Firefox
+pref("evergreen.downloads.excludeHosts", ""); // comma-separated; subdomains included
+pref("evergreen.downloads.log", false);       // decisions and retries to the browser console

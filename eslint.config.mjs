@@ -9,6 +9,7 @@ import globals from "globals";
 // Globals available to privileged (chrome) code in Firefox system modules.
 const firefoxChrome = {
   Cc: "readonly",
+  Cr: "readonly",
   Ci: "readonly",
   Cu: "readonly",
   ChromeUtils: "readonly",

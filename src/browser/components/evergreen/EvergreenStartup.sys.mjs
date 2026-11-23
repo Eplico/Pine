@@ -16,6 +16,7 @@ import { SpacesStore } from "./SpacesStore.sys.mjs";
 import { EvergreenWindow } from "./EvergreenWindow.sys.mjs";
 import { EvergreenProfile } from "./EvergreenProfile.sys.mjs";
 import { EvergreenUpdate } from "./EvergreenUpdate.sys.mjs";
+import { EvergreenDownloads } from "./EvergreenDownloads.sys.mjs";
 import { importBrowserModule } from "./FirefoxModules.sys.mjs";
 
 export { getSearchService };
@@ -70,9 +71,11 @@ export const EvergreenStartup = {
     this._applyFirstRunDefaults().catch(e => console.error("Evergreen first run", e));
     ArchiveStore.ready().then(() => this._startArchiveTimer());
     EvergreenUpdate.init();
+    EvergreenDownloads.init().catch(e => console.error("Evergreen downloads", e));
   },
 
   quit() {
+    EvergreenDownloads.quit();
     EvergreenUpdate.quit();
     this._timer?.cancel();
     this._timer = null;
