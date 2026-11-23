@@ -19,10 +19,11 @@
  */
 
 import { importBrowserModule } from "./FirefoxModules.sys.mjs";
-import { isUpdate, newestRelease } from "./UpdateCheck.sys.mjs";
+import { isUpdate, newestRelease, parseChecksums, releaseFileUrl, windowsSetupName } from "./UpdateCheck.sys.mjs";
 
 const PREF_ENABLED = "evergreen.update.check";
 const PREF_URL = "evergreen.update.url";
+const PREF_BASE = "evergreen.update.downloadBase";
 const PREF_VERSION = "evergreen.version";
 const PREF_LAST = "evergreen.update.lastCheck";
 
@@ -30,11 +31,14 @@ const FIRST_CHECK_MS = 30 * 1000;
 const CHECK_EVERY_MS = 12 * 60 * 60 * 1000;
 const MIN_GAP_S = 6 * 60 * 60;
 const FETCH_TIMEOUT_MS = 20 * 1000;
+const INSTALLER_TIMEOUT_MS = 15 * 60 * 1000;
+const MAX_INSTALLER_BYTES = 500 * 1024 * 1024;
 const NOTIFICATION = "evergreen-update";
 
 const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   AppConstants: "resource://gre/modules/AppConstants.sys.mjs",
+  FileUtils: "resource://gre/modules/FileUtils.sys.mjs",
   Subprocess: "resource://gre/modules/Subprocess.sys.mjs",
   setTimeout: "resource://gre/modules/Timer.sys.mjs",
   clearTimeout: "resource://gre/modules/Timer.sys.mjs",
@@ -118,24 +122,28 @@ export const EvergreenUpdate = {
     return { state: "available", release };
   },
 
-  async _latest() {
+  /** GET `url` (a request with no cookies); throws unless it succeeds in time. */
+  async _get(url, timeoutMs = FETCH_TIMEOUT_MS, headers = {}) {
     // (AbortSignal.timeout needs a window, which a system module has not got.)
     let controller = new AbortController();
-    let timer = lazy.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    let timer = lazy.setTimeout(() => controller.abort(), timeoutMs);
     try {
-      let response = await fetch(Services.prefs.getStringPref(PREF_URL), {
-        credentials: "omit",
-        cache: "no-store",
-        headers: { Accept: "application/vnd.github+json" },
-        signal: controller.signal,
-      });
+      let response = await fetch(url, { credentials: "omit", cache: "no-store", headers, signal: controller.signal });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
-      return newestRelease(await response.json(), lazy.AppConstants.platform);
+      // The body is read before the timer is cleared, so a stalled body times out too.
+      return { response, body: await response.arrayBuffer() };
     } finally {
       lazy.clearTimeout(timer);
     }
+  },
+
+  async _latest() {
+    let { body } = await this._get(Services.prefs.getStringPref(PREF_URL), FETCH_TIMEOUT_MS, {
+      Accept: "application/vnd.github+json",
+    });
+    return newestRelease(JSON.parse(new TextDecoder().decode(body)), lazy.AppConstants.platform);
   },
 
   // --- the notice ----------------------------------------------------------
@@ -182,6 +190,14 @@ export const EvergreenUpdate = {
             "l10n-id": "evergreen-update-button",
             callback: () => {
               this._download(win, release, managed);
+              return true;
+            },
+          }
+        : this.usesInstaller()
+        ? {
+            "l10n-id": "evergreen-update-button",
+            callback: () => {
+              this._downloadInstallerFlow(win, release);
               return true;
             },
           }
@@ -251,6 +267,106 @@ export const EvergreenUpdate = {
     if (release.pageUrl) {
       win.openTrustedLinkIn(release.pageUrl, "tab");
     }
+  },
+
+  // --- Windows: download and check the installer, then run it -------------------
+
+  usesInstaller() {
+    return lazy.AppConstants.platform == "win";
+  },
+
+  /**
+   * Downloads the release's installer and checks it against the release's
+   * SHA256SUMS.txt. Resolves to the path of the checked file; throws (and
+   * leaves no file) if anything is off.
+   */
+  async downloadInstaller(release) {
+    let base = Services.prefs.getStringPref(PREF_BASE, "");
+    let name = windowsSetupName(release.version);
+    let fileUrl = name && releaseFileUrl(base, release.tag, name);
+    let sumsUrl = name && releaseFileUrl(base, release.tag, "SHA256SUMS.txt");
+    if (!fileUrl || !sumsUrl) {
+      throw new Error("not a trusted download address");
+    }
+    let sums = parseChecksums(new TextDecoder().decode((await this._get(sumsUrl)).body));
+    let expected = sums[name];
+    if (!expected) {
+      throw new Error(`no checksum is published for ${name}`);
+    }
+    let { body } = await this._get(fileUrl, INSTALLER_TIMEOUT_MS);
+    if (body.byteLength > MAX_INSTALLER_BYTES) {
+      throw new Error("the download is far larger than an installer");
+    }
+    let dir = PathUtils.join(PathUtils.tempDir, "evergreen-update");
+    await IOUtils.makeDirectory(dir, { ignoreExisting: true });
+    let path = PathUtils.join(dir, name);
+    await IOUtils.write(path, new Uint8Array(body));
+    if ((await IOUtils.computeHexDigest(path, "sha256")) != expected) {
+      await IOUtils.remove(path, { ignoreAbsent: true });
+      throw new Error("the download does not match its published checksum");
+    }
+    return path;
+  },
+
+  async _downloadInstallerFlow(win, release) {
+    let box = this._box(win);
+    box.getNotificationWithValue(NOTIFICATION)?.close();
+    await box.appendNotification(
+      NOTIFICATION,
+      {
+        label: { "l10n-id": "evergreen-update-working", "l10n-args": { version: release.version } },
+        priority: box.PRIORITY_INFO_MEDIUM,
+      },
+      []
+    );
+    try {
+      let path = await this.downloadInstaller(release);
+      await this._showInstallReady(win, release, path);
+    } catch (e) {
+      console.error("Evergreen update", e);
+      await this._showFailure(win, release, e.message);
+    }
+  },
+
+  async _showInstallReady(win, release, path) {
+    let box = this._box(win);
+    box.getNotificationWithValue(NOTIFICATION)?.close();
+    await box.appendNotification(
+      NOTIFICATION,
+      {
+        label: { "l10n-id": "evergreen-update-installer-ready", "l10n-args": { version: release.version } },
+        priority: box.PRIORITY_INFO_HIGH,
+      },
+      [
+        {
+          "l10n-id": "evergreen-update-install",
+          callback: () => {
+            this._runInstaller(win, release, path);
+            return true;
+          },
+        },
+        { "l10n-id": "evergreen-update-later", callback: () => false },
+      ]
+    );
+  },
+
+  /** Opens the installer and quits, so it can replace the files. */
+  async _runInstaller(win, release, path) {
+    let cancel = Cc["@mozilla.org/supports-PRBool;1"].createInstance(Ci.nsISupportsPRBool);
+    Services.obs.notifyObservers(cancel, "quit-application-requested", "restart");
+    if (cancel.data) {
+      return; // the user cancelled the quit
+    }
+    try {
+      let process = Cc["@mozilla.org/process/util;1"].createInstance(Ci.nsIProcess);
+      process.init(new lazy.FileUtils.File(path));
+      process.runAsync([], 0);
+    } catch (e) {
+      console.error("Evergreen update", e);
+      await this._showFailure(win, release, e.message);
+      return;
+    }
+    Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit);
   },
 
   // --- Linux: evergreen-install --------------------------------------------

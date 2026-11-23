@@ -123,6 +123,8 @@ pref("evergreen.archive.maxAgeDays", 30);
 // list, with no cookies or identifiers. Turn off to update only by hand.
 pref("evergreen.update.check", true);
 pref("evergreen.update.url", "https://api.github.com/repos/Eplico/Pine/releases?per_page=30");
+// Where a release's files are downloaded from (https only; the files are checked against the release's SHA256SUMS.txt).
+pref("evergreen.update.downloadBase", "https://github.com/Eplico/Pine/releases/download/");
 // On the first run of a new installation folder, offer the earlier profile.
 pref("evergreen.firstrun.profilePrompt", true);
 

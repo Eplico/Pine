@@ -98,3 +98,48 @@ export function safePageUrl(url) {
 export function isUpdate(current, release) {
   return !!release && compareVersions(release.version, current) === 1;
 }
+
+/**
+ * The checksums in a SHA256SUMS.txt ("<64 hex>  <name>", or "<hex> *<name>"),
+ * as { name: lowercase hex }.
+ */
+export function parseChecksums(text) {
+  let sums = {};
+  for (let line of String(text ?? "").split(/\r?\n/)) {
+    let m = /^([0-9a-fA-F]{64})\s+\*?(\S+)\s*$/.exec(line);
+    if (m) {
+      sums[m[2]] = m[1].toLowerCase();
+    }
+  }
+  return sums;
+}
+
+/** The installer a Windows release carries. */
+export function windowsSetupName(version) {
+  return parseVersion(version) ? `Evergreen-${version}-win64-setup.exe` : null;
+}
+
+/**
+ * Where a file of a release is downloaded from: base + tag + "/" + name. The
+ * base must be https (plain http only to this computer, for tests), and tag
+ * and name must be plain release names, so a hostile release list cannot send
+ * the download anywhere else. Returns null if anything is off.
+ */
+export function releaseFileUrl(base, tag, name) {
+  if (!/^v[0-9][0-9.]*(-linux)?$/.test(tag ?? "") || !/^[A-Za-z0-9._-]+$/.test(name ?? "")) {
+    return null;
+  }
+  try {
+    let u = new URL(base);
+    let local = u.protocol == "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname);
+    if (u.protocol != "https:" && !local) {
+      return null;
+    }
+    if (!u.pathname.endsWith("/")) {
+      u.pathname += "/";
+    }
+    return `${u.origin}${u.pathname}${tag}/${name}`;
+  } catch {
+    return null;
+  }
+}

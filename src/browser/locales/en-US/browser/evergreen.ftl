@@ -165,6 +165,12 @@ evergreen-update-restart =
     .label = Restart
     .accesskey = R
 # Variables:
+#   $version (String) - The new Evergreen version.
+evergreen-update-installer-ready = Evergreen { $version } is downloaded and checked. Install it now: Evergreen closes, the installer opens, and your tabs and data are kept.
+evergreen-update-install =
+    .label = Install
+    .accesskey = I
+# Variables:
 #   $error (String) - Why the update failed.
 evergreen-update-failed = Evergreen could not update itself: { $error }
 

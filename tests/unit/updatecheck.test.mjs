@@ -78,3 +78,29 @@ test("only https release pages are kept", () => {
   assert.equal(U.newestRelease([{ ...linux("0.3"), html_url: "javascript:alert(1)" }], "linux").pageUrl, "");
   assert.equal(U.newestRelease([{ ...linux("0.3"), html_url: "http://example.com/" }], "linux").pageUrl, "");
 });
+
+test("checksum files are read by name", () => {
+  let a = "a".repeat(64);
+  let b = "B".repeat(64);
+  let sums = U.parseChecksums(`${a}  one.exe\r\n${b} *two.zip\nnot a line\n${"c".repeat(63)}  short\n`);
+  assert.deepEqual(sums, { "one.exe": a, "two.zip": "b".repeat(64) });
+  assert.deepEqual(U.parseChecksums(null), {});
+});
+
+test("the Windows installer's name follows the version", () => {
+  assert.equal(U.windowsSetupName("0.3"), "Evergreen-0.3-win64-setup.exe");
+  assert.equal(U.windowsSetupName("../0.3"), null);
+});
+
+test("downloads only come from https (or this computer) and plain release names", () => {
+  let base = "https://github.com/Eplico/Pine/releases/download/";
+  assert.equal(U.releaseFileUrl(base, "v0.3", "Evergreen-0.3-win64-setup.exe"), `${base}v0.3/Evergreen-0.3-win64-setup.exe`);
+  assert.equal(U.releaseFileUrl(base.slice(0, -1), "v0.3-linux", "SHA256SUMS.txt"), `${base}v0.3-linux/SHA256SUMS.txt`);
+  assert.equal(U.releaseFileUrl("http://127.0.0.1:8080/", "v0.3", "a.exe"), "http://127.0.0.1:8080/v0.3/a.exe");
+  assert.equal(U.releaseFileUrl("http://example.com/", "v0.3", "a.exe"), null);
+  assert.equal(U.releaseFileUrl("ftp://example.com/", "v0.3", "a.exe"), null);
+  assert.equal(U.releaseFileUrl("not a url", "v0.3", "a.exe"), null);
+  assert.equal(U.releaseFileUrl(base, "v0.3/../x", "a.exe"), null);
+  assert.equal(U.releaseFileUrl(base, "v0.3", "../a.exe"), null);
+  assert.equal(U.releaseFileUrl(base, "main", "a.exe"), null);
+});

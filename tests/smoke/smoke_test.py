@@ -20,6 +20,7 @@ Exit status is non-zero if any check fails.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.server
 import json
 import os
@@ -94,11 +95,32 @@ def fake_releases(version: str) -> list[dict]:
 class PageServer:
     """Serves /a.html, /b.html, ... with predictable titles on 127.0.0.1.
 
-    /releases.json plays GitHub's release list, for the update-notice check."""
+    /releases.json plays GitHub's release list, for the update-notice check;
+    /v9.9/... plays that release's files."""
+
+    corrupt = False  # serve an installer that does not match its checksum
 
     def __init__(self):
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
+                if self.path.startswith("/v9.9/"):
+                    # A release's files: a fake installer and its checksums.
+                    # /bad/ publishes a checksum that does not match.
+                    name = self.path.split("/")[-1]
+                    setup = b"MZ fake installer " * 1000
+                    if name == "SHA256SUMS.txt":
+                        digest = hashlib.sha256(setup).hexdigest()
+                        body = f"{digest}  Evergreen-9.9-win64-setup.exe\n".encode()
+                    elif name == "Evergreen-9.9-win64-setup.exe":
+                        body = setup if not PageServer.corrupt else setup + b"x"
+                    else:
+                        self.send_error(404)
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 if self.path.startswith("/releases.json"):
                     body = json.dumps(fake_releases("9.9")).encode()
                     self.send_response(200)
@@ -1330,6 +1352,53 @@ class Run:
             assert r["current"] == "current", r
             return f"newer release announced: \"{r['text']}\""
 
+        def windows_installer_download():
+            r = self.js(
+                """
+                let [base] = arguments;
+                let { EvergreenUpdate } = ChromeUtils.importESModule("@BASE@EvergreenUpdate.sys.mjs");
+                let P = Services.prefs;
+                let release = { version: "9.9", tag: "v9.9" };
+                let out = {};
+                P.setStringPref("evergreen.update.downloadBase", base);
+                try {
+                  let path = await EvergreenUpdate.downloadInstaller(release);
+                  out.ok = await IOUtils.exists(path);
+                  out.size = (await IOUtils.stat(path)).size;
+                  await IOUtils.remove(path);
+                } catch (e) { out.okError = String(e.message); }
+                // Not https and not this computer: refused before any request.
+                P.setStringPref("evergreen.update.downloadBase", "http://example.com/");
+                try { await EvergreenUpdate.downloadInstaller(release); out.insecure = "accepted"; }
+                catch (e) { out.insecure = String(e.message); }
+                P.clearUserPref("evergreen.update.downloadBase");
+                return out;
+                """,
+                f"http://127.0.0.1:{self.server.port}/",
+            )
+            assert r.get("ok") and r["size"] == len(b"MZ fake installer " * 1000), r
+            assert "trusted" in r["insecure"], r
+            PageServer.corrupt = True
+            try:
+                bad = self.js(
+                    """
+                    let [base] = arguments;
+                    let { EvergreenUpdate } = ChromeUtils.importESModule("@BASE@EvergreenUpdate.sys.mjs");
+                    Services.prefs.setStringPref("evergreen.update.downloadBase", base);
+                    let out = {};
+                    try { out.path = await EvergreenUpdate.downloadInstaller({ version: "9.9", tag: "v9.9" }); }
+                    catch (e) { out.error = String(e.message); }
+                    Services.prefs.clearUserPref("evergreen.update.downloadBase");
+                    out.left = await IOUtils.exists(PathUtils.join(PathUtils.tempDir, "evergreen-update", "Evergreen-9.9-win64-setup.exe"));
+                    return out;
+                    """,
+                    f"http://127.0.0.1:{self.server.port}/",
+                )
+            finally:
+                PageServer.corrupt = False
+            assert "checksum" in bad.get("error", "") and not bad["left"] and "path" not in bad, bad
+            return "installer downloaded and checked; a bad checksum or an insecure address is refused"
+
         def profile_adoption():
             r = self.js(
                 """
@@ -1509,6 +1578,7 @@ class Run:
         self.check("rename a Space by clicking its name", rename)
         self.check("an empty Space shows the start page, with no tab", empty_space)
         self.check("newer release: a notice with an update button", update_notice)
+        self.check("Windows update: installer downloaded and checked against the checksums", windows_installer_download)
         self.check("new installation: offers the earlier profile with more data", profile_adoption)
         self.check("accelerated downloads: several connections, retries, resume, fallbacks", accelerated_downloads)
         self.check("no Evergreen errors in the console", console_errors)
