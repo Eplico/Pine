@@ -167,10 +167,23 @@ prefs, the limits).
   (`DownloadServer` in `smoke_test.py`): several connections at once, cut
   connections retried, pause and resume, files left alone, a server that lies
   about ranges, and the off switch.
-- **Not verified until CI says so** (see the next section's results): the whole
-  Firefox side. Things most likely to need a fix: taking over a legacy download
-  (`download.cancel()` then restart), `nsIFileOutputStream` seek/`writeFrom`,
-  the resume path at startup, and the `_checkReputationAndMove` inheritance.
+- **Verified in a real Firefox 160 (CI, Linux and Windows)**: takeover of a
+  navigated download on six connections, cut connections retried, pause and
+  resume in the same session, files left alone, fallback when a server ignores
+  ranges, the off switch. Fixes the first run needed: `nsIFileOutputStream` has
+  no `writeFrom` (copy through `nsIBinaryInputStream.readBytes` + `write`) and
+  `saveURL` gained an `aOriginalURL` argument in 160 (smoke test).
+- **Still unverified**: resume *after a restart* (the `evergreen` property in
+  `downloads.json`, `_resume`), downloads with cookies/containers/private
+  windows, very large files, slow disks (writes are on the main thread).
+- **Windows in-app update**: `EvergreenUpdate.downloadInstaller` downloads
+  `Evergreen-<v>-win64-setup.exe` from `evergreen.update.downloadBase`
+  (https only), checks it against the release's `SHA256SUMS.txt`, and the
+  *Install* button runs it (`nsIProcess`) and quits. The download-and-check is
+  smoke-tested on every platform; **running the installer has never been tried**.
+- `AbortSignal.timeout` throws in a system module ("Could not find window"): the
+  daily update check had never worked until this was found by CI. Use
+  `AbortController` + `Timer.sys.mjs`.
 
 ## Current state (v0.1.1, as released)
 
