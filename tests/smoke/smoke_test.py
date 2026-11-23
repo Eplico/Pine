@@ -1287,8 +1287,25 @@ class Run:
                 let found = await EvergreenUpdate.check({ force: true });
                 out.state = found.state;
                 out.version = found.release?.version;
-                let box = w.gNotificationBox;
-                let n = await until(() => box.getNotificationWithValue("evergreen-update"));
+                // Where did the notice go? Look in every browser window, and say what is there if it is missing.
+                let wins = [...Services.wm.getEnumerator("navigator:browser")];
+                let find = () => {
+                  for (let win of wins) {
+                    let found = win.gNotificationBox?.getNotificationWithValue("evergreen-update");
+                    if (found) { return found; }
+                  }
+                  return null;
+                };
+                let n;
+                try { n = await until(find, 8000); } catch {
+                  out.windows = wins.map(win => ({
+                    popup: win.document.documentElement.hasAttribute("popup-window"),
+                    private: win.document.documentElement.hasAttribute("privatebrowsingmode"),
+                    notices: [...(win.gNotificationBox?.allNotifications ?? [])].map(x => x.getAttribute("value")),
+                  }));
+                  out.consoleErrors = evergreenConsoleErrors();
+                  return out;
+                }
                 let text = () => (n.messageText?.textContent || n.shadowRoot?.textContent || "");
                 await until(() => text().includes("9.9"));
                 out.text = text().trim();
@@ -1303,6 +1320,7 @@ class Run:
                 """,
                 f"http://127.0.0.1:{self.server.port}/releases.json",
             )
+            assert "windows" not in r, f"the update notice never appeared: {r}"
             assert r["dev"] == "dev" and r["disabled"] == "disabled", r
             assert r["state"] == "available" and r["version"] == "9.9", r
             assert "9.9" in r["text"], r

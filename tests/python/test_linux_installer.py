@@ -56,14 +56,44 @@ def png(size: int) -> bytes:
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
+_FAKE_C = r"""
+#include <stdlib.h>
+#include <unistd.h>
+int main(int argc, char **argv) { if (argc > 1) sleep((unsigned)atoi(argv[1])); return 0; }
+"""
+_fake_program: bytes | None = None
+
+
+def fake_program() -> bytes:
+    """A program that sleeps for as many seconds as its first argument says.
+
+    A copy of `sleep` is no use where coreutils is one multi-call binary that
+    picks its job from the name it is run as (uutils, on newer Ubuntu): a copy
+    called `evergreen` refuses to run. So build a tiny program, if there is a
+    compiler, and only otherwise copy `sleep`.
+    """
+    global _fake_program
+    if _fake_program is None:
+        cc = shutil.which("cc") or shutil.which("gcc")
+        data = None
+        if cc:
+            with tempfile.TemporaryDirectory() as d:
+                src, exe = Path(d, "fake.c"), Path(d, "fake")
+                src.write_text(_FAKE_C)
+                if subprocess.run([cc, "-O1", "-o", str(exe), str(src)], capture_output=True).returncode == 0:
+                    data = exe.read_bytes()
+        _fake_program = data or Path(shutil.which("sleep")).read_bytes()
+    return _fake_program
+
+
 def make_tarball(path: Path, marker: str, with_icons: bool = True) -> None:
-    """evergreen/evergreen (a copy of `sleep`) plus the packaged icons."""
+    """evergreen/evergreen (a program that just sleeps) plus the packaged icons."""
     with tarfile.open(path, "w:xz") as tar:
         def add(name, data: bytes, mode=0o644):
             info = tarfile.TarInfo(name)
             info.size, info.mode = len(data), mode
             tar.addfile(info, io.BytesIO(data))
-        add("evergreen/evergreen", Path(shutil.which("sleep")).read_bytes(), 0o755)
+        add("evergreen/evergreen", fake_program(), 0o755)
         add("evergreen/marker.txt", marker.encode())
         if with_icons:
             for size in (16, 32, 48, 64, 128):
@@ -219,7 +249,7 @@ class InstallTests(unittest.TestCase):
         return r
 
     def start_evergreen(self):
-        """Run the installed program (a copy of sleep) so /proc shows it."""
+        """Run the installed program (a sleeping fake) so /proc shows it."""
         p = subprocess.Popen([str(self.root / "app/evergreen"), "60"])
         self.procs.append(p)
         time.sleep(0.2)

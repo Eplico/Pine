@@ -18,6 +18,7 @@
  * UpdateCheck.sys.mjs (unit-tested); this file is the fetching and the UI.
  */
 
+import { importBrowserModule } from "./FirefoxModules.sys.mjs";
 import { isUpdate, newestRelease } from "./UpdateCheck.sys.mjs";
 
 const PREF_ENABLED = "evergreen.update.check";
@@ -130,9 +131,20 @@ export const EvergreenUpdate = {
 
   // --- the notice ----------------------------------------------------------
 
+  /** The window to show the notice in: the top normal (not popup, not private) browser window. */
   _window() {
+    try {
+      let { BrowserWindowTracker } = importBrowserModule("browser/modules", "BrowserWindowTracker");
+      let top = BrowserWindowTracker.getTopWindow({ allowPopups: false });
+      if (top && !top.closed) {
+        return top;
+      }
+    } catch (e) {
+      console.error("Evergreen update: no window tracker", e);
+    }
     for (let win of Services.wm.getEnumerator("navigator:browser")) {
-      if (!win.closed && !win.document.documentElement.hasAttribute("privatebrowsingmode")) {
+      let root = win.document.documentElement;
+      if (!win.closed && !root.hasAttribute("privatebrowsingmode") && !root.hasAttribute("popup-window")) {
         return win;
       }
     }
