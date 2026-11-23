@@ -147,7 +147,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            xvfb libgtk-3-0t64 libdbus-glib-1-2 libasound2t64 libx11-xcb1 libxtst6 libpulse0
+            xvfb libgtk-3-0t64 libdbus-glib-1-2 libasound2t64 libx11-xcb1 libxtst6 libpulse0 \
+            x11-utils desktop-file-utils
 
       - name: Download the package
         uses: actions/download-artifact@v4
@@ -168,6 +169,17 @@ jobs:
           echo "Bundled extensions:"
           ls "$EG_WORK_DIR/pkg/evergreen/distribution/extensions" || true
           python tests/smoke/smoke_test.py --binary "$bin" --headless --screenshots "$EG_WORK_DIR/dev/screenshots" --log-screenshots
+
+      # Installs the tarball with evergreen-install, then looks at it as a
+      # desktop does: a valid app-menu entry and icon, and a window whose class
+      # matches the entry (what makes a pinned launcher start Evergreen and show
+      # its icon). Not blocking until it has passed once on a real build.
+      - name: Desktop integration check (launcher, icon, window class)
+        continue-on-error: true
+        run: |
+          python tests/linux/check_desktop_integration.py \
+            --tarball "$(ls release/*-portable.tar.* | head -1)" \
+            --installer release/evergreen-install
 
       - name: Upload smoke-test diagnostics
         if: always()

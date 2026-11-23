@@ -294,7 +294,10 @@ class PrepareTest(unittest.TestCase):
         self.assertTrue((comp / "EvergreenWindow.sys.mjs").exists())
         branding_prefs = (tree / prepare.BRANDING_PREFS).read_text()
         self.assertTrue(branding_prefs.startswith((config.BRANDING_DIR / "pref/firefox-branding.js").read_text().rstrip()))
-        self.assertTrue(branding_prefs.endswith(config.PREFS_FILE.read_text()))
+        self.assertIn(config.PREFS_FILE.read_text().rstrip(), branding_prefs)
+        # The build's own version, for the update check (not set in prefs/evergreen.js).
+        self.assertTrue(branding_prefs.endswith(f'pref("evergreen.version", "{config.load_version()}");\n'))
+        self.assertNotIn("evergreen.version", config.PREFS_FILE.read_text())
         self.assertFalse((comp / "evergreen.js").exists())
         self.assertTrue((tree / "browser/locales/en-US/browser/evergreen.ftl").exists())
         brand = tree / "browser/branding/evergreen"
@@ -606,6 +609,44 @@ class ReleaseTest(unittest.TestCase):
             sums = (out / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(sums), 2)
             self.assertTrue(sums[1].endswith("  Evergreen-0.1-win64-setup.exe"))
+
+    def test_collect_linux_adds_the_installer_script_to_the_checksums(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dist = Path(tmp) / "tree" / "obj-evergreen" / "dist"
+            dist.mkdir(parents=True)
+            base = "evergreen-160.0.1.en-US.linux-x86_64"
+            with tarfile.open(dist / f"{base}.tar.xz", "w:xz") as t:
+                for name in ("evergreen/evergreen", "evergreen/browser/chrome/icons/default/default128.png"):
+                    info = tarfile.TarInfo(name)
+                    info.size = 1
+                    t.addfile(info, io.BytesIO(b"x"))
+            (dist / "package_name.txt").write_text(f"{base}.tar.xz\n", encoding="utf-8")
+            out = Path(tmp) / "release"
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                written = release.collect(Path(tmp) / "tree", "0.2", "linux", out)
+            self.assertEqual(
+                [p.name for p in written],
+                ["Evergreen-0.2-linux-x86_64-portable.tar.xz", "evergreen-install", "SHA256SUMS.txt"],
+            )
+            sums = (out / "SHA256SUMS.txt").read_text(encoding="utf-8")
+            self.assertIn("  evergreen-install\n", sums)
+            self.assertNotIn("WARNING", buf.getvalue())
+
+    def test_collect_linux_warns_when_the_package_has_no_window_icons(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dist = Path(tmp) / "tree" / "obj-evergreen" / "dist"
+            dist.mkdir(parents=True)
+            base = "evergreen-160.0.1.en-US.linux-x86_64"
+            with tarfile.open(dist / f"{base}.tar.xz", "w:xz") as t:
+                info = tarfile.TarInfo("evergreen/evergreen")
+                info.size = 1
+                t.addfile(info, io.BytesIO(b"x"))
+            (dist / "package_name.txt").write_text(f"{base}.tar.xz\n", encoding="utf-8")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                release.collect(Path(tmp) / "tree", "0.2", "linux", Path(tmp) / "release")
+            self.assertIn("WARNING", buf.getvalue())
 
     def test_collect_rejects_wrong_layout(self):
         with tempfile.TemporaryDirectory() as tmp:

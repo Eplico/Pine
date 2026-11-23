@@ -174,7 +174,11 @@ def install_prefs(tree: Path) -> str:
     combined = (
         branding.read_text(encoding="utf-8").rstrip()
         + "\n\n// ---- Evergreen defaults, appended by eg.py from prefs/evergreen.js ----\n\n"
-        + PREFS_FILE.read_text(encoding="utf-8")
+        + PREFS_FILE.read_text(encoding="utf-8").rstrip()
+        # The version the update check compares against (the dev harness has
+        # none, so it never looks for updates). A pref, not a build define:
+        # Firefox's own version must stay Firefox's.
+        + f'\n\npref("evergreen.version", "{load_version()}");\n'
     )
     (tree / BRANDING_PREFS).write_text(combined, encoding="utf-8")
     return BRANDING_PREFS.as_posix()

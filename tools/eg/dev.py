@@ -40,6 +40,9 @@ DEV_PREFS = {
     "devtools.chrome.enabled": True,
     "devtools.debugger.remote-enabled": True,
     "devtools.debugger.prompt-connection": True,
+    # The copy of Firefox shares the computer's real profile list, so it must
+    # never offer one of those as "your earlier Evergreen data".
+    "evergreen.firstrun.profilePrompt": False,
 }
 
 DEFAULT_LOCATIONS = {

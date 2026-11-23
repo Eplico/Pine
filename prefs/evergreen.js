@@ -116,3 +116,12 @@ pref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);
 pref("evergreen.archive.afterHours", 12);
 pref("evergreen.archive.maxEntries", 500);
 pref("evergreen.archive.maxAgeDays", 30);
+
+// --- Updates and moving to a new installation ---------------------------------
+// (The build adds the version number to compare against; see eg.py prepare.)
+// Look for a newer Evergreen once a day: one request to GitHub's public release
+// list, with no cookies or identifiers. Turn off to update only by hand.
+pref("evergreen.update.check", true);
+pref("evergreen.update.url", "https://api.github.com/repos/Eplico/Pine/releases?per_page=30");
+// On the first run of a new installation folder, offer the earlier profile.
+pref("evergreen.firstrun.profilePrompt", true);

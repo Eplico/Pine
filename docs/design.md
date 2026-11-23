@@ -703,7 +703,7 @@ from building, on a machine that receives only the build outputs.
 | Platform | Packages | Notes |
 |---|---|---|
 | **Windows** (first) | Installer (`-setup.exe`) and portable zip, on GitHub releases | x86-64 first; arm64 later. **Not code-signed yet**, so SmartScreen warns on first run |
-| Linux | Tarball | The tarball is the reference security configuration; inside Flatpak, Firefox cannot use the user namespaces its Linux sandbox relies on |
+| Linux | Tarball, plus `evergreen-install` (installs and updates it under `~/.local/share/evergreen`, adds the app-menu entry and icons) | The tarball is the reference security configuration; inside Flatpak, Firefox cannot use the user namespaces its Linux sandbox relies on |
 | macOS | Signed, notarized DMG | Later |
 
 ### 9.4 Updates
@@ -716,6 +716,24 @@ from building, on a machine that receives only the build outputs.
 - Until the updater is set up (M3), builds use `--disable-updater` (so
   nothing asks Mozilla's update server about a product it does not know) and
   Evergreen is updated by installing a new release.
+- **Interim updater (0.2).** `EvergreenUpdate` asks GitHub's public release
+  list (`evergreen.update.url`) once a day which release is newest for this
+  platform, and shows a bar in the window; `evergreen.update.check = false`
+  turns it off. No account, cookies or identifiers are sent. On Linux,
+  `evergreen-install` (installed beside the program) downloads the release over
+  HTTPS and checks it against that release's `SHA256SUMS.txt` before switching;
+  the switch happens while Evergreen is closed. The trust root is GitHub plus
+  TLS: the checksums come from the same release, so this does **not** protect
+  against a compromised release; signed MAR updates (above) do, and replace this
+  at M3. Windows only gets the notice and a link to the download page.
+- **Profiles survive updates and moves.** Firefox ties a profile to the folder
+  the program runs from (a hash of the install path, "dedicated profiles"), so a
+  copy unpacked in a new place starts empty. Linux installs always use the same
+  folder (`~/.local/share/evergreen/app`), updating by swapping its contents;
+  and on the first run of a new folder `EvergreenProfile` offers the earlier
+  profile with the most data, switching with the same call `about:profiles` uses
+  (nothing is copied or deleted). Dedicated profiles are not turned off: that
+  would hide the profiles of existing users.
 
 ### 9.5 Reproducibility
 

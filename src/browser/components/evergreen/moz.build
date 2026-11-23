@@ -14,13 +14,17 @@ MOZ_SRC_FILES += [
     "ArchiveStore.sys.mjs",
     "evergreen.css",
     "EvergreenLayout.sys.mjs",
+    "EvergreenProfile.sys.mjs",
     "EvergreenSearch.sys.mjs",
     "EvergreenStartup.sys.mjs",
+    "EvergreenUpdate.sys.mjs",
     "EvergreenWindow.sys.mjs",
     "FirefoxModules.sys.mjs",
+    "ProfileAdoption.sys.mjs",
     "SearchDefaults.sys.mjs",
     "Spaces.sys.mjs",
     "SpacesStore.sys.mjs",
+    "UpdateCheck.sys.mjs",
 ]
 
 EXTRA_COMPONENTS += [

@@ -147,6 +147,18 @@ build › Run workflow) and publishes nothing unless *Publish* is ticked.
 3. `from_run` re-tests or re-publishes an earlier run's package without
    compiling again, as on Windows.
 
+The release also carries `evergreen-install` (`packaging/linux/evergreen-install`,
+Python 3, standard library only; `eg.py collect` copies it next to the tarball
+and into `SHA256SUMS.txt`). It installs to `~/.local/share/evergreen/app` (a
+fixed path: Firefox ties the profile to it), writes the launcher script,
+`evergreen.desktop` and the icons, and updates in place (`stage` downloads and
+verifies into `app.staged`; the launcher script switches it in while Evergreen
+is closed). Tests: `python -m unittest tests.python.test_linux_installer`
+(a fake GitHub on localhost) and, on a real build,
+`tests/linux/check_desktop_integration.py` (the workflow runs it after the
+smoke test: valid entry, icon, and a window whose class matches
+`StartupWMClass`).
+
 By hand on Ubuntu or Debian: install the packages listed in the workflow, then
 `python3 eg.py fetch`, `prepare`, `fetch-extensions --pin`, `build`, `package`
 and `collect --platform linux --out release`. Rust must be installed (rustup).

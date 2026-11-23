@@ -1,0 +1,682 @@
+#!/usr/bin/env python3
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+"""Install and update Evergreen on Linux (x86-64), without root.
+
+  evergreen-install                 install the newest release (same as `install`)
+  evergreen-install install         ... and add Evergreen to the app menu
+  evergreen-install update          install a newer release, if there is one
+  evergreen-install check [--json]  is there a newer release? (exit 0 = yes, 10 = no)
+  evergreen-install stage           download and verify a newer release; do not switch yet
+  evergreen-install apply           switch to a staged release (when Evergreen is closed)
+  evergreen-install integrate       rewrite the launcher, icons and app-menu entry
+  evergreen-install uninstall       remove the program (your profile is kept)
+
+Why this exists
+---------------
+* Everything lives under one fixed folder (~/.local/share/evergreen). Firefox
+  ties a profile to the folder the program runs from, so an Evergreen unpacked
+  somewhere new starts with an empty profile. Updating in place keeps the path,
+  and so keeps your tabs, Spaces, logins and settings.
+* It writes the app-menu entry (evergreen.desktop) and icons the window
+  manager needs to show Evergreen's icon and to let a pinned launcher start it.
+* Downloads come from this project's GitHub releases over HTTPS and are
+  checked against the release's SHA256SUMS.txt before anything is replaced.
+
+Needs Python 3.8+ and nothing else. Lives at <root>/evergreen-install after
+installing, so `~/.local/share/evergreen/evergreen-install update` works
+offline from the browser's own files.
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import fcntl
+import hashlib
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+TOOL_VERSION = "1"
+DEFAULT_REPO = "Eplico/Pine"
+DEFAULT_API = "https://api.github.com"
+NAME = "evergreen"
+TARBALL_RE = re.compile(r"^Evergreen-(?P<v>[0-9][0-9.]*)-linux-x86_64-portable\.tar\.(xz|bz2|gz)$")
+INSTALLER_ASSET = "evergreen-install"
+EXIT_NO_UPDATE = 10
+
+
+class InstallError(Exception):
+    pass
+
+
+# --- versions -------------------------------------------------------------------
+
+
+def parse_version(text: str) -> tuple[int, ...]:
+    """'0.10' -> (0, 10). Raises on anything that is not dotted numbers."""
+    if not re.fullmatch(r"[0-9]+(\.[0-9]+)*", text or ""):
+        raise InstallError(f"not a version number: {text!r}")
+    return tuple(int(p) for p in text.split("."))
+
+
+def is_newer(candidate: str, current: str | None) -> bool:
+    if not current:
+        return True
+    a, b = parse_version(candidate), parse_version(current)
+    n = max(len(a), len(b))
+    return a + (0,) * (n - len(a)) > b + (0,) * (n - len(b))
+
+
+# --- where things go ------------------------------------------------------------
+
+
+def data_home() -> Path:
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+
+
+class Layout:
+    """<root>/app is what runs. <root>/app.staged is a verified newer release
+    waiting to be switched in; <root>/app.old is the one it replaced."""
+
+    def __init__(self, root: Path | None = None, bin_dir: Path | None = None):
+        self.root = Path(root) if root else data_home() / NAME
+        self.bin_dir = Path(bin_dir) if bin_dir else Path.home() / ".local" / "bin"
+        self.app = self.root / "app"
+        self.staged = self.root / "app.staged"
+        self.old = self.root / "app.old"
+        self.version_file = self.root / "VERSION"
+        self.staged_version_file = self.root / "staged-version"
+        self.launcher = self.root / NAME
+        self.installer = self.root / INSTALLER_ASSET
+        self.lock_file = self.root / ".lock"
+        self.desktop_file = data_home() / "applications" / f"{NAME}.desktop"
+        self.icon_dir = data_home() / "icons" / "hicolor"
+        self.bin_link = self.bin_dir / NAME
+
+    @property
+    def binary(self) -> Path:
+        return self.app / NAME
+
+    def installed_version(self) -> str | None:
+        return _read(self.version_file) if self.binary.exists() else None
+
+    def staged_version(self) -> str | None:
+        return _read(self.staged_version_file) if self.staged.is_dir() else None
+
+
+def _read(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+# --- output ---------------------------------------------------------------------
+
+
+_quiet = False
+
+
+def say(*msg) -> None:
+    if not _quiet:
+        print(*msg, file=sys.stderr, flush=True)
+
+
+# --- releases -------------------------------------------------------------------
+
+
+class Release:
+    def __init__(self, version, tag, page, tarball, sums, installer):
+        self.version, self.tag, self.page = version, tag, page
+        self.tarball = tarball  # (name, url)
+        self.sums = sums  # url
+        self.installer = installer  # url or None
+
+
+def _check_url(url: str) -> str:
+    u = urllib.parse.urlparse(url)
+    local = u.hostname in ("127.0.0.1", "localhost", "::1")
+    if u.scheme != "https" and not (u.scheme == "http" and local):
+        raise InstallError(f"refusing to download over an unencrypted connection: {url}")
+    return url
+
+
+def _open(url: str, timeout: int = 60):
+    req = urllib.request.Request(_check_url(url), headers={"User-Agent": f"evergreen-install/{TOOL_VERSION}"})
+    try:
+        return urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.URLError as e:
+        raise InstallError(f"could not reach {url}: {e.reason if hasattr(e, 'reason') else e}") from e
+
+
+def pick_release(releases: list[dict], want: str | None = None) -> Release:
+    """The newest published Linux release (tag v<version>-linux), or `want`."""
+    best = None
+    for r in releases:
+        tag = r.get("tag_name") or ""
+        m = re.fullmatch(r"v([0-9][0-9.]*)-linux", tag)
+        if not m or r.get("draft") or r.get("prerelease"):
+            continue
+        version = m.group(1)
+        assets = {a.get("name"): a.get("browser_download_url") for a in r.get("assets", [])}
+        tarballs = [(n, u) for n, u in assets.items() if n and (t := TARBALL_RE.match(n)) and t["v"] == version]
+        if not tarballs or "SHA256SUMS.txt" not in assets:
+            continue
+        if want and parse_version(want) != parse_version(version):
+            continue
+        rel = Release(version, tag, r.get("html_url", ""), tarballs[0], assets["SHA256SUMS.txt"],
+                      assets.get(INSTALLER_ASSET))
+        if best is None or is_newer(version, best.version):
+            best = rel
+    if not best:
+        raise InstallError(f"no Linux release for version {want} found" if want else "no Linux release found")
+    return best
+
+
+def fetch_release(api: str, repo: str, want: str | None = None) -> Release:
+    with _open(f"{api.rstrip('/')}/repos/{repo}/releases?per_page=30") as resp:
+        releases = json.load(resp)
+    return pick_release(releases, want)
+
+
+def parse_sums(text: str) -> dict[str, str]:
+    out = {}
+    for line in text.splitlines():
+        m = re.fullmatch(r"([0-9a-fA-F]{64})\s+\*?(\S+)", line.strip())
+        if m:
+            out[m.group(2)] = m.group(1).lower()
+    return out
+
+
+def sha256_of(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def download(url: str, dest: Path, what: str) -> None:
+    with _open(url, timeout=120) as resp, open(dest, "wb") as out:
+        total = int(resp.headers.get("Content-Length") or 0)
+        done, shown = 0, -1
+        while chunk := resp.read(1 << 20):
+            out.write(chunk)
+            done += len(chunk)
+            if total and not _quiet and done * 10 // total != shown:
+                shown = done * 10 // total
+                say(f"  {what}: {done * 100 // total}%")
+
+
+# --- unpacking ------------------------------------------------------------------
+
+
+def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
+    """Unpack, refusing anything that would land outside `dest`."""
+    root = dest.resolve()
+    for m in tar.getmembers():
+        target = (dest / m.name).resolve()
+        if target != root and root not in target.parents:
+            raise InstallError(f"unsafe path in archive: {m.name}")
+        if m.issym() or m.islnk():
+            link = (target.parent / m.linkname) if m.issym() else (dest / m.linkname)
+            if root not in link.resolve().parents and link.resolve() != root:
+                raise InstallError(f"unsafe link in archive: {m.name} -> {m.linkname}")
+        if m.isdev():
+            raise InstallError(f"device file in archive: {m.name}")
+    if hasattr(tarfile, "tar_filter"):
+        tar.extractall(dest, filter="tar")
+    else:
+        tar.extractall(dest)
+
+
+def unpack_tarball(tarball: Path, dest: Path) -> Path:
+    """Unpack into `dest`; returns the evergreen/ folder inside."""
+    with tarfile.open(tarball) as tar:
+        _safe_extract(tar, dest)
+    top = dest / NAME
+    if not (top / NAME).is_file():
+        raise InstallError(f"{tarball.name} does not contain {NAME}/{NAME}")
+    return top
+
+
+# --- running instance and lock --------------------------------------------------
+
+
+def running_from(app: Path) -> bool:
+    """Is any process running a program from inside `app`?"""
+    prefix = str(app.resolve()) + os.sep
+    try:
+        pids = [p for p in os.listdir("/proc") if p.isdigit()]
+    except OSError:
+        return False
+    for pid in pids:
+        try:
+            exe = os.readlink(f"/proc/{pid}/exe")
+        except OSError:
+            continue
+        if exe.endswith(" (deleted)"):
+            exe = exe[: -len(" (deleted)")]
+        if exe.startswith(prefix):
+            return True
+    return False
+
+
+@contextlib.contextmanager
+def locked(layout: Layout):
+    layout.root.mkdir(parents=True, exist_ok=True)
+    with open(layout.lock_file, "a+") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise InstallError("another evergreen-install is running; try again in a moment") from None
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+# --- staging and switching ------------------------------------------------------
+
+
+def _remove(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path, ignore_errors=True)
+    elif path.exists() or path.is_symlink():
+        path.unlink()
+
+
+def stage_tarball(layout: Layout, tarball: Path, version: str) -> None:
+    """Unpack `tarball` into <root>/app.staged (replacing any earlier staged copy)."""
+    layout.root.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix=".stage-", dir=layout.root))
+    try:
+        say(f"Unpacking Evergreen {version}...")
+        top = unpack_tarball(tarball, work)
+        _remove(layout.staged)
+        os.rename(top, layout.staged)
+        layout.staged_version_file.write_text(version + "\n", encoding="utf-8")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def wait_until_closed(layout: Layout, seconds: float) -> None:
+    """Give a quitting Evergreen (and its helper processes) time to be gone."""
+    deadline = time.monotonic() + seconds
+    while running_from(layout.app) and time.monotonic() < deadline:
+        time.sleep(0.2)
+
+
+def apply_staged(layout: Layout, while_running: bool = False, wait: float = 0) -> str:
+    """Switch to the staged release. Returns "applied", "nothing" or "running".
+
+    A running Evergreen stops the switch (its files must not change under it);
+    `wait` gives one that is quitting that many seconds to finish first.
+    `while_running` switches anyway: for repair, not for the browser's own update.
+    """
+    if wait and layout.staged.is_dir():
+        wait_until_closed(layout, wait)
+    with locked(layout):
+        if not layout.staged.is_dir():
+            if not running_from(layout.app):
+                _remove(layout.old)
+            return "nothing"
+        if not while_running and running_from(layout.app):
+            return "running"
+        if not (layout.staged / NAME).is_file():
+            raise InstallError("the staged copy is incomplete; run `evergreen-install stage` again")
+        version = layout.staged_version() or "unknown"
+        _remove(layout.old)
+        if layout.app.exists():
+            os.rename(layout.app, layout.old)
+        try:
+            os.rename(layout.staged, layout.app)
+        except OSError:
+            if layout.old.exists():
+                os.rename(layout.old, layout.app)  # put the working copy back
+            raise
+        layout.version_file.write_text(version + "\n", encoding="utf-8")
+        _remove(layout.staged_version_file)
+        if not while_running:
+            _remove(layout.old)
+        integrate(layout)
+        return "applied"
+
+
+# --- desktop integration --------------------------------------------------------
+
+
+def _desktop_quote(arg: str) -> str:
+    """One argument of a .desktop Exec line (Desktop Entry spec, "Exec")."""
+    if re.fullmatch(r"[A-Za-z0-9_@%+=:,./-]+", arg):
+        return arg
+    escaped = re.sub(r'(["`$\\])', r"\\\1", arg).replace("%", "%%")
+    return f'"{escaped}"'
+
+
+def desktop_entry(layout: Layout) -> str:
+    exe = _desktop_quote(str(layout.launcher))
+    icon = best_icon(layout)
+    return "\n".join(
+        [
+            "[Desktop Entry]",
+            "Version=1.0",
+            "Type=Application",
+            "Name=Evergreen",
+            "GenericName=Web Browser",
+            "Comment=Browse the web",
+            f"Exec={exe} %u",
+            # An absolute path always resolves, even before the desktop has
+            # refreshed its icon cache (a missing icon shows as a blank page).
+            f"Icon={icon}" if icon else f"Icon={NAME}",
+            "Terminal=false",
+            "StartupNotify=true",
+            # Must match the window's class (Firefox uses its remoting name,
+            # "evergreen"); this is what ties a window to this entry so a
+            # pinned launcher starts it and shows its icon.
+            f"StartupWMClass={NAME}",
+            "Categories=Network;WebBrowser;",
+            "MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;",
+            "Actions=new-window;new-private-window;",
+            "",
+            "[Desktop Action new-window]",
+            "Name=New Window",
+            f"Exec={exe} --new-window %u",
+            "",
+            "[Desktop Action new-private-window]",
+            "Name=New Private Window",
+            f"Exec={exe} --private-window %u",
+            "",
+        ]
+    )
+
+
+ICON_FILE_RE = re.compile(r"^default(\d+)\.png$")
+
+
+def app_icons(layout: Layout) -> dict[int, Path]:
+    """size -> PNG, from the icons Firefox's packaging puts in the app folder."""
+    found: dict[int, Path] = {}
+    if layout.app.is_dir():
+        for p in sorted(layout.app.rglob("default*.png")):
+            if p.parent.name == "default" and p.parent.parent.name == "icons":
+                m = ICON_FILE_RE.match(p.name)
+                if m:
+                    found.setdefault(int(m.group(1)), p)
+    return found
+
+
+def installed_icon(layout: Layout, size: int) -> Path:
+    return layout.icon_dir / f"{size}x{size}" / "apps" / f"{NAME}.png"
+
+
+def best_icon(layout: Layout) -> Path | None:
+    have = [s for s in sorted(app_icons(layout)) if installed_icon(layout, s).exists()]
+    if not have:
+        have = sorted(app_icons(layout))
+        return app_icons(layout)[have[-1]] if have else None
+    pick = 128 if 128 in have else have[-1]
+    return installed_icon(layout, pick)
+
+
+def launcher_script(layout: Layout) -> str:
+    root = "'" + str(layout.root).replace("'", "'\\''") + "'"
+    return (
+        "#!/bin/sh\n"
+        "# Starts Evergreen. Written by evergreen-install; rewritten on every update.\n"
+        f"root={root}\n"
+        "# A newer release downloaded earlier is switched in now, while Evergreen is closed.\n"
+        'if [ -d "$root/app.staged" ] || [ -d "$root/app.old" ]; then\n'
+        '    # After "Restart to update" the browser is still finishing; give it a few seconds.\n'
+        '    wait=0; [ -n "$EVERGREEN_UPDATE_WAIT" ] && wait=15\n'
+        '    "$root/evergreen-install" apply --quiet --wait "$wait" >/dev/null 2>&1 || true\n'
+        "fi\n"
+        "unset EVERGREEN_UPDATE_WAIT\n"
+        'exec "$root/app/evergreen" "$@"\n'
+    )
+
+
+def _write_executable(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".new")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.chmod(0o755)
+    os.replace(tmp, path)
+
+
+def tool_version(text: str) -> int:
+    m = re.search(r'^TOOL_VERSION = "(\d+)"', text, re.M)
+    return int(m.group(1)) if m else 0
+
+
+def integrate(layout: Layout) -> None:
+    """Launcher, copy of this tool, icons, ~/.local/bin link and app-menu entry."""
+    layout.root.mkdir(parents=True, exist_ok=True)
+    # Keep a copy of this tool beside the program, unless a newer one is there.
+    src = Path(__file__).resolve()
+    mine = src.read_text(encoding="utf-8")
+    if not layout.installer.exists() or tool_version(mine) > tool_version(layout.installer.read_text(encoding="utf-8")):
+        _write_executable(layout.installer, mine)
+    _write_executable(layout.launcher, launcher_script(layout))
+
+    for size, png in app_icons(layout).items():
+        dest = installed_icon(layout, size)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(png, dest)
+    if not app_icons(layout):
+        say("Warning: no icons found in the program folder; the launcher will have no icon.")
+
+    layout.desktop_file.parent.mkdir(parents=True, exist_ok=True)
+    layout.desktop_file.write_text(desktop_entry(layout), encoding="utf-8")
+
+    layout.bin_dir.mkdir(parents=True, exist_ok=True)
+    if layout.bin_link.is_symlink() or layout.bin_link.exists():
+        layout.bin_link.unlink()
+    layout.bin_link.symlink_to(layout.launcher)
+
+    # Best effort: ask the desktop to notice the new entry now.
+    for cmd in (["update-desktop-database", str(layout.desktop_file.parent)],):
+        if shutil.which(cmd[0]):
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+
+def uninstall(layout: Layout) -> None:
+    if running_from(layout.app):
+        raise InstallError("Evergreen is running; close it first")
+    for p in (layout.app, layout.staged, layout.old):
+        _remove(p)
+    for p in (layout.launcher, layout.installer, layout.version_file, layout.staged_version_file,
+              layout.desktop_file, layout.bin_link, layout.lock_file):
+        with contextlib.suppress(OSError):
+            p.unlink()
+    for size in (16, 22, 24, 32, 48, 64, 128, 256):
+        with contextlib.suppress(OSError):
+            installed_icon(layout, size).unlink()
+    with contextlib.suppress(OSError):
+        layout.root.rmdir()
+
+
+# --- commands -------------------------------------------------------------------
+
+
+def download_and_stage(layout: Layout, rel: Release) -> None:
+    name, url = rel.tarball
+    with tempfile.TemporaryDirectory(prefix="evergreen-dl-") as tmp:
+        tmp = Path(tmp)
+        sums_path = tmp / "SHA256SUMS.txt"
+        download(rel.sums, sums_path, "checksums")
+        sums = parse_sums(sums_path.read_text(encoding="utf-8"))
+        if name not in sums:
+            raise InstallError(f"SHA256SUMS.txt has no entry for {name}")
+        archive = tmp / name
+        say(f"Downloading {name}...")
+        download(url, archive, "download")
+        if sha256_of(archive) != sums[name]:
+            raise InstallError(f"{name} does not match its checksum; not installing it")
+        say("Checksum matches.")
+        stage_tarball(layout, archive, rel.version)
+        # Keep this tool current too: it is a release file with its own checksum.
+        if rel.installer and INSTALLER_ASSET in sums:
+            new_tool = tmp / INSTALLER_ASSET
+            download(rel.installer, new_tool, "installer")
+            if sha256_of(new_tool) == sums[INSTALLER_ASSET]:
+                _write_executable(layout.installer, new_tool.read_text(encoding="utf-8"))
+
+
+def cmd_check(args, layout: Layout) -> int:
+    current = layout.installed_version()
+    latest = fetch_release(args.api, args.repo)
+    newer = is_newer(latest.version, current)
+    staged = layout.staged_version()
+    if args.json:
+        print(json.dumps({"installed": current, "latest": latest.version, "update": newer,
+                          "staged": staged, "page": latest.page}))
+    else:
+        print(f"installed: {current or 'none'}\nlatest:    {latest.version}\n"
+              f"{'update available' if newer else 'up to date'}")
+    return 0 if newer else EXIT_NO_UPDATE
+
+
+def cmd_stage(args, layout: Layout) -> int:
+    current = layout.installed_version()
+    rel = fetch_release(args.api, args.repo, args.version)
+    if not is_newer(rel.version, current) and not args.version:
+        say(f"Evergreen {current} is the newest release.")
+        if args.json:
+            print(json.dumps({"installed": current, "staged": None, "update": False}))
+        return EXIT_NO_UPDATE
+    if layout.staged_version() == rel.version and (layout.staged / NAME).is_file():
+        say(f"Evergreen {rel.version} is already downloaded.")
+    else:
+        with locked(layout):
+            download_and_stage(layout, rel)
+    if args.json:
+        print(json.dumps({"installed": current, "staged": rel.version, "update": True}))
+    return 0
+
+
+def cmd_install_or_update(args, layout: Layout) -> int:
+    if args.tarball:
+        tarball = Path(args.tarball).resolve()
+        if args.sha256 and sha256_of(tarball) != args.sha256.lower():
+            raise InstallError("the tarball does not match the given checksum")
+        if not args.sha256:
+            say("Note: installing from a local file without a checksum to compare.")
+        m = TARBALL_RE.match(tarball.name)
+        version = args.version or (m["v"] if m else "unknown")
+        with locked(layout):
+            stage_tarball(layout, tarball, version)
+    else:
+        current = layout.installed_version()
+        rel = fetch_release(args.api, args.repo, args.version)
+        if args.command == "update" and not is_newer(rel.version, current) and not args.version:
+            say(f"Evergreen {current} is already the newest release.")
+            return 0
+        say(f"Evergreen {rel.version}" + (f" (you have {current})" if current else ""))
+        with locked(layout):
+            download_and_stage(layout, rel)
+    result = apply_staged(layout, while_running=False)
+    if result == "running":
+        say("Evergreen is open, so the new version is downloaded but not switched in yet.")
+        say("Close Evergreen and start it again: it switches over when it starts.")
+        return 0
+    say(f"Evergreen {layout.installed_version()} is installed in {layout.app}")
+    say(f"Start it from your app menu (Evergreen), or run: {layout.bin_link}")
+    if str(layout.bin_dir) not in os.environ.get("PATH", "").split(os.pathsep):
+        say(f"({layout.bin_dir} is not on your PATH; the app menu entry works regardless.)")
+    return 0
+
+
+def cmd_apply(args, layout: Layout) -> int:
+    result = apply_staged(layout, while_running=args.while_running, wait=args.wait)
+    if args.json:
+        print(json.dumps({"result": result, "installed": layout.installed_version()}))
+    elif result == "applied":
+        say(f"Switched to Evergreen {layout.installed_version()}.")
+    return 0 if result != "running" else 11
+
+
+def cmd_integrate(args, layout: Layout) -> int:
+    if not layout.binary.exists():
+        raise InstallError("Evergreen is not installed here; run `evergreen-install install` first")
+    integrate(layout)
+    say("Launcher, icons and app-menu entry written.")
+    return 0
+
+
+def cmd_uninstall(args, layout: Layout) -> int:
+    uninstall(layout)
+    say("Evergreen's program files, launcher and icons are removed.")
+    say("Your profile (tabs, Spaces, logins, settings) was not touched.")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="evergreen-install", description=__doc__.split("\n\n")[0])
+    p.add_argument("command", nargs="?", default="install",
+                   choices=["install", "update", "check", "stage", "apply", "integrate", "uninstall"])
+    p.add_argument("--version", help="a specific release (default: the newest)")
+    p.add_argument("--tarball", help="install from this downloaded tarball instead of GitHub")
+    p.add_argument("--sha256", help="expected SHA-256 of --tarball")
+    p.add_argument("--prefix", help="install folder (default: ~/.local/share/evergreen)")
+    p.add_argument("--bin-dir", help="where to link `evergreen` (default: ~/.local/bin)")
+    p.add_argument("--repo", default=os.environ.get("EVERGREEN_REPO", DEFAULT_REPO))
+    p.add_argument("--api", default=os.environ.get("EVERGREEN_API", DEFAULT_API))
+    p.add_argument("--json", action="store_true", help="machine-readable result on stdout")
+    p.add_argument("--quiet", action="store_true")
+    p.add_argument("--wait", type=float, default=0, metavar="SECONDS",
+                   help="apply: wait this long for a quitting Evergreen to finish first")
+    p.add_argument("--while-running", action="store_true",
+                   help="apply: switch even though Evergreen is open (repair only)")
+    return p
+
+
+COMMANDS = {
+    "install": cmd_install_or_update,
+    "update": cmd_install_or_update,
+    "check": cmd_check,
+    "stage": cmd_stage,
+    "apply": cmd_apply,
+    "integrate": cmd_integrate,
+    "uninstall": cmd_uninstall,
+}
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    global _quiet
+    _quiet = args.quiet
+    if not sys.platform.startswith("linux"):
+        print("evergreen-install is for Linux.", file=sys.stderr)
+        return 2
+    if platform.machine() not in ("x86_64", "AMD64"):
+        print(f"Evergreen is built for x86-64 only; this computer is {platform.machine()}.", file=sys.stderr)
+        return 2
+    layout = Layout(args.prefix, args.bin_dir)
+    args.command = args.command or "install"
+    try:
+        return COMMANDS[args.command](args, layout)
+    except InstallError as e:
+        print(f"evergreen-install: {e}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

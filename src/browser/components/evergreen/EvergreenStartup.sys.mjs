@@ -14,6 +14,8 @@ import { ArchiveStore } from "./ArchiveStore.sys.mjs";
 import { applyDefaultSearch, getSearchService, reconcileDefaultSearch } from "./SearchDefaults.sys.mjs";
 import { SpacesStore } from "./SpacesStore.sys.mjs";
 import { EvergreenWindow } from "./EvergreenWindow.sys.mjs";
+import { EvergreenProfile } from "./EvergreenProfile.sys.mjs";
+import { EvergreenUpdate } from "./EvergreenUpdate.sys.mjs";
 import { importBrowserModule } from "./FirefoxModules.sys.mjs";
 
 export { getSearchService };
@@ -67,9 +69,11 @@ export const EvergreenStartup = {
     }
     this._applyFirstRunDefaults().catch(e => console.error("Evergreen first run", e));
     ArchiveStore.ready().then(() => this._startArchiveTimer());
+    EvergreenUpdate.init();
   },
 
   quit() {
+    EvergreenUpdate.quit();
     this._timer?.cancel();
     this._timer = null;
     if (this._searchObserver) {
@@ -103,12 +107,34 @@ export const EvergreenStartup = {
     }
     this._watchSearchEngines(service, changeReason);
 
+    // A new installation folder means an empty profile (Firefox ties a profile
+    // to the folder it runs from): offer the earlier one first. If the user
+    // takes it, Evergreen restarts into it, so don't ask about importing here.
+    let adoption = await this._offerEarlierProfile();
+
     if (
+      adoption != "offered" &&
       !Services.prefs.getBoolPref(STEP_PREFS.importOffer, false) &&
       Services.prefs.getBoolPref(IMPORT_PROMPT_PREF, true)
     ) {
       Services.prefs.setBoolPref(STEP_PREFS.importOffer, true);
       await this.offerImport();
+    }
+  },
+
+  async _offerEarlierProfile() {
+    let win = Services.wm.getMostRecentWindow("navigator:browser");
+    for (let i = 0; win && !win.gBrowserInit?.delayedStartupFinished && i < 100; i++) {
+      await new Promise(resolve => win.setTimeout(resolve, 100));
+    }
+    if (!win || win.closed) {
+      return "none";
+    }
+    try {
+      return await EvergreenProfile.offerIfNeeded(win);
+    } catch (e) {
+      console.error("Evergreen profile offer", e);
+      return "none";
     }
   },
 

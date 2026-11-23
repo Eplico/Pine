@@ -29,8 +29,31 @@ These are early preview builds, made by this repository's
 [Windows build workflow](.github/workflows/windows-build.yml) from the
 signature-checked Firefox source. They are **not code-signed yet**, so
 Windows SmartScreen shows "Windows protected your PC": choose **More info**,
-then **Run anyway**. Each release lists SHA-256 checksums. There are no
-automatic updates yet; install a newer release to update.
+then **Run anyway**. Each release lists SHA-256 checksums. On Windows, Evergreen
+tells you when a newer release is out (a bar in the window) and opens its
+download page; you install it over the old one and your data stays.
+
+## Download (Linux)
+
+Get **`evergreen-install`** from the newest release tagged
+`v<version>-linux` (on the [releases page](https://github.com/Eplico/Pine/releases))
+and run it:
+
+```
+python3 evergreen-install
+```
+
+It downloads the release, checks it against the release's `SHA256SUMS.txt`,
+installs it under `~/.local/share/evergreen` and adds **Evergreen to your app
+menu** with its icon (pin it from there). When a newer release is out,
+Evergreen shows a bar: **Update**, then **Restart**. Your tabs, Spaces and
+logins stay: the profile lives outside the install folder, and updates keep the
+install folder's path (Firefox ties a profile to it). Moving from a copy you
+unpacked yourself? The first start offers to use your earlier data.
+
+The daily check is one request to GitHub's public release list, with no
+account, cookies or identifiers. Set `evergreen.update.check` to `false` in
+`about:config` to turn it off.
 
 > The repository is still named `Pine`; the product is Evergreen.
 

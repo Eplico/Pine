@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import http.server
+import json
 import os
 import re
 import shutil
@@ -79,12 +80,33 @@ const evergreenConsoleErrors = () => {
 """
 
 
+def fake_releases(version: str) -> list[dict]:
+    """GitHub's release list with a Linux and a Windows release of `version`."""
+    def release(tag, files):
+        return {"tag_name": tag, "html_url": f"https://github.com/Eplico/Pine/releases/tag/{tag}",
+                "draft": False, "prerelease": False, "assets": [{"name": n} for n in files]}
+    return [
+        release(f"v{version}-linux", [f"Evergreen-{version}-linux-x86_64-portable.tar.xz", "SHA256SUMS.txt"]),
+        release(f"v{version}", [f"Evergreen-{version}-win64-setup.exe", "SHA256SUMS.txt"]),
+    ]
+
+
 class PageServer:
-    """Serves /a.html, /b.html, ... with predictable titles on 127.0.0.1."""
+    """Serves /a.html, /b.html, ... with predictable titles on 127.0.0.1.
+
+    /releases.json plays GitHub's release list, for the update-notice check."""
 
     def __init__(self):
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
+                if self.path.startswith("/releases.json"):
+                    body = json.dumps(fake_releases("9.9")).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 name = self.path.strip("/").split(".")[0].upper() or "INDEX"
                 body = f"<!doctype html><title>Page {name}</title><h1>Page {name}</h1>".encode()
                 self.send_response(200)
@@ -165,6 +187,8 @@ class Run:
                     # The first-run import window would cover the browser;
                     # the "import offer" check opens it on purpose.
                     'user_pref("evergreen.firstrun.importPrompt", false);',
+                    # No real profile list belongs in a test (the offer is checked below).
+                    'user_pref("evergreen.firstrun.profilePrompt", false);',
                 ]
             )
             + "\n",
@@ -312,6 +336,9 @@ class Run:
 
         def prefs():
             expected = {p.name: p.value for p in load_prefs(PREFS_FILE)}
+            if not self.args.binary:
+                # The dev harness overrides a few prefs on purpose (egdev.DEV_PREFS).
+                expected = {k: v for k, v in expected.items() if k not in egdev.DEV_PREFS}
             actual = self.js(
                 """
                 let b = Services.prefs.getDefaultBranch("");
@@ -1124,6 +1151,85 @@ class Run:
             assert opened["listed"] == 1 and opened["first"] and opened["blanks"] == 0, r
             return "closing every tab shows the start page; what is opened from it becomes the Space's tab"
 
+        def update_notice():
+            r = self.js(
+                """
+                let [url] = arguments;
+                let { EvergreenUpdate } = ChromeUtils.importESModule("@BASE@EvergreenUpdate.sys.mjs");
+                let P = Services.prefs;
+                P.setStringPref("evergreen.update.url", url);
+                let out = {};
+                // The dev harness has no version number: nothing to compare, so no request.
+                P.setStringPref("evergreen.version", "");
+                out.dev = (await EvergreenUpdate.check({ force: true })).state;
+                P.setStringPref("evergreen.version", "0.1");
+                P.setBoolPref("evergreen.update.check", false);
+                out.disabled = (await EvergreenUpdate.check({ force: true })).state;
+                P.setBoolPref("evergreen.update.check", true);
+                let found = await EvergreenUpdate.check({ force: true });
+                out.state = found.state;
+                out.version = found.release?.version;
+                let box = w.gNotificationBox;
+                let n = await until(() => box.getNotificationWithValue("evergreen-update"));
+                let text = () => (n.messageText?.textContent || n.shadowRoot?.textContent || "");
+                await until(() => text().includes("9.9"));
+                out.text = text().trim();
+                out.buttons = [...(n.buttonContainer ?? n).querySelectorAll("button")].map(b => b.getAttribute("data-l10n-id"));
+                n.close();
+                // Same or newer build than the latest release: nothing to announce.
+                P.setStringPref("evergreen.version", "9.9");
+                out.current = (await EvergreenUpdate.check({ force: true })).state;
+                P.clearUserPref("evergreen.version");
+                P.clearUserPref("evergreen.update.url");
+                return out;
+                """,
+                f"http://127.0.0.1:{self.server.port}/releases.json",
+            )
+            assert r["dev"] == "dev" and r["disabled"] == "disabled", r
+            assert r["state"] == "available" and r["version"] == "9.9", r
+            assert "9.9" in r["text"], r
+            # This is not a managed Linux install, so the notice offers the release page.
+            assert r["buttons"] == ["evergreen-update-download", "evergreen-update-later"], r
+            assert r["current"] == "current", r
+            return f"newer release announced: \"{r['text']}\""
+
+        def profile_adoption():
+            r = self.js(
+                """
+                let { EvergreenProfile } = ChromeUtils.importESModule("@BASE@EvergreenProfile.sys.mjs");
+                let { DATA_FILES } = ChromeUtils.importESModule("@BASE@ProfileAdoption.sys.mjs");
+                let fake = (name, root) => ({ name, rootDir: { path: root }, QueryInterface() { return this; } });
+                let service = list => ({ profiles: list });
+                let cur = PathUtils.profileDir;
+                let measured = (await EvergreenProfile.describeProfiles(service([fake("current", cur)])))[0].bytes;
+                let base = PathUtils.join(PathUtils.tempDir, "evergreen-smoke-profiles");
+                await IOUtils.remove(base, { recursive: true, ignoreAbsent: true });
+                let make = async (name, bytes, compat) => {
+                  let dir = PathUtils.join(base, name);
+                  await IOUtils.makeDirectory(dir, { createAncestors: true });
+                  await IOUtils.write(PathUtils.join(dir, "places.sqlite"), new Uint8Array(bytes));
+                  if (compat) {
+                    await IOUtils.writeUTF8(PathUtils.join(dir, "compatibility.ini"), `[Compatibility]\nLastVersion=${compat}_20260101000000/20260101000000\n`);
+                  }
+                  return dir;
+                };
+                let old = await make("old.default", measured + 4 * 1024 * 1024, "157.0");
+                let newer = await make("newer.default", measured + 8 * 1024 * 1024, "999.0");
+                let out = {};
+                let pick = async list => (await EvergreenProfile.candidate(service(list)))?.name ?? null;
+                // The bigger earlier profile is offered; the one a newer build used is not.
+                out.picked = await pick([fake("current", cur), fake("old", old), fake("newer", newer)]);
+                out.onlyNewer = await pick([fake("current", cur), fake("newer", newer)]);
+                // Nothing bigger than the profile in use: nothing is offered.
+                out.none = await pick([fake("current", cur)]);
+                await IOUtils.remove(base, { recursive: true, ignoreAbsent: true });
+                return out;
+                """
+            )
+            assert r["picked"] == "old", r
+            assert r["onlyNewer"] is None and r["none"] is None, r
+            return "offers the bigger earlier profile; skips one a newer build used"
+
         def console_errors():
             r = self.errors_before_restart + self.js("return evergreenConsoleErrors();")
             assert not r, "\n  " + "\n  ".join(r)
@@ -1157,6 +1263,8 @@ class Run:
         self.check("sidebar keyboard shortcut", sidebar_shortcut)
         self.check("rename a Space by clicking its name", rename)
         self.check("an empty Space shows the start page, with no tab", empty_space)
+        self.check("newer release: a notice with an update button", update_notice)
+        self.check("new installation: offers the earlier profile with more data", profile_adoption)
         self.check("no Evergreen errors in the console", console_errors)
         self.quit()
         print(f"\n{len(self.failures)} failed" if self.failures else "\nAll checks passed")

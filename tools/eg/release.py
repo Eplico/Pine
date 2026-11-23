@@ -20,8 +20,12 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from .config import APP_NAME, EgError
+from .config import APP_NAME, REPO, EgError
 from .mach import OBJDIR_NAME
+
+# The Linux installer/updater is published next to the tarball (and covered by
+# the same SHA256SUMS.txt), so a release page has everything needed to install.
+LINUX_INSTALLER = REPO / "packaging" / "linux" / "evergreen-install"
 
 PLATFORM_SUFFIX = {"windows": "win64", "linux": "linux-x86_64", "macos": "mac"}
 
@@ -86,6 +90,18 @@ def check_archive(archive: Path, platform: str) -> None:
         raise EgError(
             f"{archive.name} has no {binary} ({len(names)} entries; top level: {', '.join(top) or 'none'})"
         )
+    if platform == "linux" and not linux_icons(names):
+        # Not fatal (the build is otherwise fine) but loud: without these the
+        # window manager has no icon for Evergreen's windows.
+        print(f"  WARNING: {archive.name} has no icons/default/default*.png; windows will have no icon")
+
+
+def linux_icons(names: list[str]) -> list[str]:
+    """Window icons in a Linux package: <app>/**/icons/default/default<size>.png."""
+    return [
+        n for n in names
+        if re.search(r"(^|/)icons/default/default\d+\.png$", n)
+    ]
 
 
 def collect(tree: Path, version: str, platform: str, out: Path) -> list[Path]:
@@ -108,6 +124,12 @@ def collect(tree: Path, version: str, platform: str, out: Path) -> list[Path]:
         shutil.copyfile(packages[kind], dest)
         written.append(dest)
         print(f"  {kind}: {dest}")
+    if platform == "linux":
+        dest = out / LINUX_INSTALLER.name
+        shutil.copyfile(LINUX_INSTALLER, dest)
+        dest.chmod(0o755)
+        written.append(dest)
+        print(f"  installer script: {dest}")
     sums = out / "SHA256SUMS.txt"
     sums.write_text("".join(f"{_sha256(p)}  {p.name}\n" for p in written), encoding="utf-8")
     written.append(sums)

@@ -79,6 +79,58 @@ Done in a later session, all on this branch:
   job prints screenshots into its log as `EVERGREEN-SHOT <name> data:image/jpeg;base64,...`
   lines (decode them to see the UI when artifacts can't be downloaded).
 
+## Update, 0.2 (installing and updating; Linux launcher)
+
+A later session, on branch `claude/relaxed-bardeen-ojrswr` (same history as
+`claude/determined-cerf-v1dp7l`). Triggered by two reports from daily use on
+Linux: moving to a new build lost the data, and the executable had no icon and
+a pinned copy turned into a blank page that could not be reopened.
+
+**Causes found (in Firefox 160.0.1's source):**
+
+- *Data seemed lost.* `nsToolkitProfileService` ("dedicated profiles",
+  `MOZ_DEDICATED_PROFILES`, implied by `browser/moz.configure`) keys each
+  install's profile on a hash of the program's folder (`GetInstallHash`). A tarball
+  unpacked somewhere else is a "first run", Firefox creates a new empty profile and
+  the old one stays claimed by the old folder. Nothing was deleted.
+- *No icon, dead pin.* The tarball is only a folder: no `evergreen.desktop`, no
+  icons in the icon theme. GNOME/KDE match a window to an app through the
+  desktop entry (`StartupWMClass` / Wayland app id = Firefox's remoting name,
+  `evergreen`), so a pinned window had nothing to match or launch.
+
+**What was added:**
+
+- `packaging/linux/evergreen-install` (Python 3, stdlib): `install`, `update`,
+  `check`, `stage`, `apply`, `integrate`, `uninstall`. Fixed install path
+  `~/.local/share/evergreen/app`, so updates keep the profile; verifies
+  downloads against `SHA256SUMS.txt`; writes the launcher script, the app-menu
+  entry (absolute `Icon=` path) and icons. `eg.py collect` ships it as a release
+  asset. 23 tests in `tests/python/test_linux_installer.py` (fake GitHub).
+- `EvergreenUpdate` + `UpdateCheck` (unit-tested): daily check of GitHub's
+  release list (`evergreen.update.*` prefs; `evergreen.version` is written
+  into the branding prefs by `eg.py prepare`), a notification bar, and on a
+  managed Linux install *Update* then *Restart* (the launcher script switches
+  folders while Evergreen is closed). Windows and hand-unpacked installs get a
+  *Download* button that opens the release page.
+- `EvergreenProfile` + `ProfileAdoption` (unit-tested): on the first run of a new
+  folder, offers the earlier profile with the most data (skipping any that a newer
+  Firefox last used), switching the way `about:profiles` does. Nothing copied or deleted.
+- Smoke checks: update notice (against a fake release list) and profile choice.
+  CI step `tests/linux/check_desktop_integration.py` (Linux build workflow,
+  `continue-on-error` until it has passed once).
+
+**Not verified (no Firefox could be run in the session; CI is the check):**
+
+- The two new smoke checks and the notification bars have never run; the
+  `l10n-id` notification labels, `Subprocess` use and the `about:profiles`-style
+  switch (`defaultProfile` then `asyncFlush`, then a restart) follow Firefox
+  160's own code but were not exercised.
+- Whether a *Wayland* app id equals `evergreen` (X11 class does, by reading the
+  code): `check_desktop_integration.py` checks X11 only.
+- The Windows build is still unrun on 160.0.1 and Windows has no in-app update.
+- The updater trusts GitHub + TLS only (the checksums are in the same release).
+  Signed MAR updates (M3) are still the real fix; see design.md §9.4.
+
 ## Current state (v0.1.1, as released)
 
 **Released, v0.1.1** (built on Firefox 157.0, run 37249999440):
@@ -112,9 +164,9 @@ Done in a later session, all on this branch:
   workflow opens the installer on a real Windows runner and checks it at 100%
   and 125% display scaling (`tests/installer/check_installer.ps1`).
 
-**Not done**: automatic updates, code signing, Linux and macOS packages, the
+**Not done**: automatic (silent) updates, code signing, macOS packages, the
 command bar, split view, Peek, the mini window, link routing (see
-"Next steps").
+"Next steps"). Update notices and Linux install/update came in 0.2 (above).
 
 ## Urgent: Firefox security updates
 
@@ -279,21 +331,34 @@ Other places:
 
 ## Next steps, roughly in order
 
-1. Ask the user whether to publish 0.2 (Linux tarball from run 44856584591,
-   and a Windows build, which must first be run on 160.0.1); check for newer
-   Firefox security releases first (see "Urgent").
-2. An update path: at least an in-browser notice of a newer GitHub release;
+1. Run the **Linux build** (it changed: the UI code is compiled in, so run
+   44856584591 is out of date), read the smoke test and the desktop check in its
+   log, then ask the user whether to publish (*Publish* ticked, or `from_run`).
+   Publishing 0.2 also needs a Windows build, first run on 160.0.1. Check for
+   newer Firefox security releases first (see "Urgent"; 160.0.1 was newest on
+   2026-11-23).
+2. Signed updates: Windows in-app update (download, verify, run the installer);
    later signed MAR updates (M3, design.md §9.4).
 3. Turn the monkeypatches listed above into small hook patches.
 4. M2 features: command bar (grow the `Ctrl+T` box: switch Space, move tab,
    search the Archive), split view on Firefox's native one, Peek, mini window,
    link routing (design.md §7).
 5. Prefs audit and egress test (M0), then code signing (M3).
+6. **Download manager** (requested by the user, not started): an IDM-style
+   accelerated, resumable, queued downloader that takes over Firefox's
+   downloads, built in or as a bundled add-on, on an open-source engine (the
+   user named something like "Mister"; the exact project is unconfirmed, so
+   ask). Likely shape: engine as a separate local helper process (aria2-style,
+   bound to 127.0.0.1 with a random token), a small WebExtension (`downloads`
+   API / `webRequest` to hand off URLs, cookies and referrer) or a UI module in
+   `src/`, and a pref to switch it off. Needs a design note in design.md first
+   (threat model: a local RPC port, handing cookies to a helper, checksums for
+   the bundled binary, licences).
 
 ## Conventions and preferences
 
-- Work on branch `claude/determined-cerf-v1dp7l`; don't open pull requests
-  unless asked.
+- Work on the branch the session names (so far `claude/determined-cerf-v1dp7l`
+  and `claude/relaxed-bardeen-ojrswr`); don't open pull requests unless asked.
 - Commit messages explain what and why. Commits made by Claude end with:
   `Co-Authored-By: <the session's model> <noreply@anthropic.com>` and
   `Claude-Session: <session URL>`.

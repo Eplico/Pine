@@ -140,3 +140,44 @@ evergreen-search-row-search = Search with { $engine }
 evergreen-search-row-search-no-engine = Search
 # Beside a typed address.
 evergreen-search-row-visit = Open address
+
+## Updates and carrying data over to a new installation
+
+# Variables:
+#   $version (String) - The new Evergreen version, e.g. "0.3".
+evergreen-update-available = Evergreen { $version } is available.
+evergreen-update-button =
+    .label = Update
+    .accesskey = U
+evergreen-update-download =
+    .label = Download
+    .accesskey = D
+evergreen-update-later =
+    .label = Later
+    .accesskey = L
+# Variables:
+#   $version (String) - The new Evergreen version.
+evergreen-update-working = Downloading Evergreen { $version }…
+# Variables:
+#   $version (String) - The new Evergreen version.
+evergreen-update-ready = Evergreen { $version } is ready. Restart to finish updating; your tabs and data are kept.
+evergreen-update-restart =
+    .label = Restart
+    .accesskey = R
+# Variables:
+#   $error (String) - Why the update failed.
+evergreen-update-failed = Evergreen could not update itself: { $error }
+
+# Variables:
+#   $date (String) - When the earlier data was last used, e.g. "Nov 21, 2026".
+#   $megabytes (Number) - How much data it holds.
+evergreen-profile-offer = Evergreen found your earlier data (last used { $date }, about { $megabytes } MB). Use it here? Nothing is deleted either way.
+# Variables:
+#   $megabytes (Number) - How much data it holds.
+evergreen-profile-offer-undated = Evergreen found your earlier data (about { $megabytes } MB). Use it here? Nothing is deleted either way.
+evergreen-profile-use =
+    .label = Use my earlier data
+    .accesskey = U
+evergreen-profile-keep =
+    .label = Start fresh
+    .accesskey = S
