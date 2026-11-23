@@ -1333,6 +1333,7 @@ class Run:
                 await until(() => text().includes("9.9"));
                 out.text = text().trim();
                 out.buttons = [...(n.buttonContainer ?? n).querySelectorAll("button")].map(b => b.getAttribute("data-l10n-id"));
+                out.platform = ChromeUtils.importESModule("resource://gre/modules/AppConstants.sys.mjs").AppConstants.platform;
                 n.close();
                 // Same or newer build than the latest release: nothing to announce.
                 P.setStringPref("evergreen.version", "9.9");
@@ -1347,8 +1348,10 @@ class Run:
             assert r["dev"] == "dev" and r["disabled"] == "disabled", r
             assert r["state"] == "available" and r["version"] == "9.9", r
             assert "9.9" in r["text"], r
-            # This is not a managed Linux install, so the notice offers the release page.
-            assert r["buttons"] == ["evergreen-update-download", "evergreen-update-later"], r
+            # Windows downloads and checks the installer in the browser; anywhere
+            # else that is not a managed Linux install, the notice opens the release page.
+            first = "evergreen-update-button" if r["platform"] == "win" else "evergreen-update-download"
+            assert r["buttons"] == [first, "evergreen-update-later"], r
             assert r["current"] == "current", r
             return f"newer release announced: \"{r['text']}\""
 
