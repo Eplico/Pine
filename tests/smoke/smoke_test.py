@@ -1384,9 +1384,19 @@ class Run:
               let list = await Downloads.getList(Downloads.ALL);
               for (let d of await list.getAll()) { await list.remove(d); }
               EvergreenDownloads.events.length = 0;
-              w.saveURL(url, null, null, true, true, null, null, null, false,
+              // saveURL(url, originalUrl, fileName, pickerTitleKey, bypassCache, skipPrompt, referrerInfo,
+              //         cookieJarSettings, sourceDocument, isPrivate, principal), as Firefox 160 has it.
+              w.saveURL(url, null, null, null, true, true, null, null, null, false,
                         Services.scriptSecurityManager.getSystemPrincipal());
-              let dl = await until(async () => (await list.getAll()).find(d => d.source.url == url), 20000);
+              let dl;
+              try {
+                dl = await until(async () => (await list.getAll()).find(d => d.source.url == url), 20000);
+              } catch {
+                let all = await list.getAll();
+                throw new Error("no download appeared for " + url + "; list: " +
+                  JSON.stringify(all.map(d => [d.source.url, d.error?.message, d.succeeded])) +
+                  "; windows: " + [...Services.wm.getEnumerator(null)].map(x => x.location.href).join(" "));
+              }
               let out = { paused: false };
               if (pauseAt) {
                 await until(() => dl.currentBytes >= pauseAt || dl.succeeded, 30000);
