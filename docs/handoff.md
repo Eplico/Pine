@@ -1,6 +1,6 @@
 # Evergreen: handoff
 
-Written 2026-11-21, updated the same day. It describes the state of the branch
+Written 2026-11-21, updated 2026-11-23. It describes the state of the branch
 `claude/determined-cerf-v1dp7l` (Evergreen **0.2**, on Firefox **160.0.1**, not
 yet released) and the published release **v0.1.1**. See "Update, 0.2" below
 for what changed since the first version of this document. Read this first, then [design.md](design.md) (the why)
@@ -24,7 +24,7 @@ product is **Evergreen**.
 |---|---|
 | Code | GitHub `Eplico/Pine`, branch `claude/determined-cerf-v1dp7l` (all work so far; no pull request has been opened) |
 | Releases | <https://github.com/Eplico/Pine/releases>: **v0.1.1** (latest, 2026-10-05), v0.1, and two older `v157.0-N` previews |
-| CI | `.github/workflows/ci.yml` on every push: lint, unit and tooling tests, patch and pref checks against the pinned Firefox, smoke test in Firefox on Linux (the pinned 157) and Windows (the runner's Firefox) |
+| CI | `.github/workflows/ci.yml` on every push: lint, unit and tooling tests, patch and pref checks against the pinned Firefox, smoke test in Firefox on Linux (the pinned 160.0.1) and Windows (the runner's Firefox) |
 | Windows build | `.github/workflows/windows-build.yml`, started by hand (Actions › Windows build › Run workflow) or by pushing a `v<VERSION>` tag. About 90 minutes |
 | Design | `docs/design.md`: goals, threat model, architecture, features, decisions (Q1–Q11), milestones |
 | Developer guide | `docs/development.md`: dev harness, tests, building on Windows, patches, releasing |
@@ -59,6 +59,22 @@ Done in a later session, all on this branch:
   `Evergreen-<VERSION>-linux-x86_64-portable.tar.*`, smoke-tests the packaged
   browser headless, and publishes (tag `v<VERSION>-linux`, not "latest") only
   with *Publish* ticked. See development.md, "Building for Linux".
+- **Linux build verified**: [run 44856584591](https://github.com/Eplico/Pine/actions/runs/44856584591)
+  (commit 477209f) compiled, packaged the tarball (artifact `evergreen-linux`,
+  about 92 MB) and passed the smoke test on the packaged binary. **Nothing from
+  0.2 has been published**; a release needs the user's go-ahead (run the Linux
+  workflow with *Publish* ticked, or `from_run`). The Windows build is still
+  unrun on 160.0.1.
+- Firefox 160 gotchas found on the way (all handled): Marionette's chrome
+  context needs `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1`; many browser modules moved
+  from `resource:///modules/` to `moz-src:///` (use `importBrowserModule` in
+  `FirefoxModules.sys.mjs`); `-moz-window-dragging` can't be read through
+  `getComputedStyle`, so the smoke test checks that the bare toolbar gaps hit
+  `#nav-bar` instead.
+- Not done or not verified: popups were checked by assertions only, never by
+  eye; "window popups" was read as Arc-style popup windows, not Peek (confirm
+  with the user); no local Firefox could be run in the cloud session (download
+  denied), so all UI verification was through CI.
 - Smoke checks for the pill, the Favorites tiles and popups; the Linux CI smoke
   job prints screenshots into its log as `EVERGREEN-SHOT <name> data:image/jpeg;base64,...`
   lines (decode them to see the UI when artifacts can't be downloaded).
@@ -263,7 +279,9 @@ Other places:
 
 ## Next steps, roughly in order
 
-1. Rebase onto the latest Firefox (160.0.1 today) and release (see "Urgent").
+1. Ask the user whether to publish 0.2 (Linux tarball from run 44856584591,
+   and a Windows build, which must first be run on 160.0.1); check for newer
+   Firefox security releases first (see "Urgent").
 2. An update path: at least an in-browser notice of a newer GitHub release;
    later signed MAR updates (M3, design.md §9.4).
 3. Turn the monkeypatches listed above into small hook patches.
@@ -277,7 +295,7 @@ Other places:
 - Work on branch `claude/determined-cerf-v1dp7l`; don't open pull requests
   unless asked.
 - Commit messages explain what and why. Commits made by Claude end with:
-  `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` and
+  `Co-Authored-By: <the session's model> <noreply@anthropic.com>` and
   `Claude-Session: <session URL>`.
 - **Publishing a release is public: get the user's explicit go-ahead first.**
   Building with *Publish* off and asking is the normal flow; publish from that
