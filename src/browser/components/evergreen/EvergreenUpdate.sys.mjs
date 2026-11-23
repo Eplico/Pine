@@ -84,7 +84,7 @@ export const EvergreenUpdate = {
    *
    * @param {object} [options]
    * @param {boolean} [options.force]  Ignore the minimum gap since the last check.
-   * @returns {Promise<{state: string, release?: object}>}
+   * @returns {Promise<{state: string, release?: object, error?: string}>}
    *   state: "disabled" | "dev" | "recent" | "current" | "available" | "error"
    */
   async check({ force = false } = {}) {
@@ -104,7 +104,7 @@ export const EvergreenUpdate = {
       release = await this._latest();
     } catch (e) {
       console.warn("Evergreen: could not check for updates:", e.message);
-      return { state: "error" };
+      return { state: "error", error: String(e?.message ?? e) };
     }
     Services.prefs.setIntPref(PREF_LAST, now);
     if (!isUpdate(current, release)) {

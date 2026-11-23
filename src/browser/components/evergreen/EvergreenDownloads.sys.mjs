@@ -380,6 +380,7 @@ export class SegmentedSaver extends DownloadCopySaver {
     } catch (ex) {
       return Promise.reject(new RangeFailure("target", { message: String(ex.message ?? ex) }));
     }
+    let input = Cc["@mozilla.org/binaryinputstream;1"].createInstance(Ci.nsIBinaryInputStream);
     let lane = { channel, request: null };
     this._lanes.add(lane);
 
@@ -432,7 +433,9 @@ export class SegmentedSaver extends DownloadCopySaver {
           let take = Math.max(0, Math.min(count, room));
           try {
             if (take > 0) {
-              let written = out.writeFrom(stream, take);
+              // (nsIFileOutputStream has no writeFrom: copy through a byte string.)
+              input.setInputStream(stream);
+              let written = out.write(input.readBytes(take), take);
               if (written != take) {
                 throw new Error(`short write: ${written} of ${take}`);
               }

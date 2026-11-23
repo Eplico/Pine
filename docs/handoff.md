@@ -131,6 +131,47 @@ a pinned copy turned into a blank page that could not be reopened.
 - The updater trusts GitHub + TLS only (the checksums are in the same release).
   Signed MAR updates (M3) are still the real fix; see design.md §9.4.
 
+## Update, 0.3 (download manager; CI findings)
+
+Same branch (`claude/relaxed-bardeen-ojrswr`). The user's ongoing permission:
+**publishing releases is allowed** once the build and its smoke test pass (do not
+publish a failing build).
+
+**CI results that the previous session never saw** (its last push, `ee8b325`,
+had failed CI): the installer tests failed on the runner because the fake
+"Evergreen" was a copy of `sleep` and the runner's coreutils is a multi-call
+binary that refuses to run under another name (now a tiny compiled fake); and
+the update notice never showed up in the smoke test (now shown in
+`BrowserWindowTracker.getTopWindow({allowPopups: false})`; the smoke check
+reports windows and notices when it is missing). Read CI results with
+`curl https://api.github.com/repos/Eplico/Pine/actions/runs/<id>/jobs` (the
+repository is public, no token needed) and job logs with the GitHub MCP tool
+(save to a file: they are 400+ KB on one line; grep for `PASS|FAIL`).
+
+**Download manager**, built in, no helper process: see
+[download-manager.md](download-manager.md) (the why, the threat model, the
+prefs, the limits).
+
+- `DownloadPlan.sys.mjs`: segments, work taking, range-reply checks, retry
+  pauses, resume state, take-over rules. 15 Node unit tests.
+- `EvergreenDownloads.sys.mjs`: `SegmentedSaver` (a `DownloadCopySaver` subclass:
+  several ranged channels, one file via `nsIFileOutputStream` per connection,
+  Firefox's own reputation check and move) and the Downloads-list view that
+  swaps it into qualifying downloads (`DownloadLegacySaver`: cancel the single
+  connection, give the same `Download` our saver and our own `.evergreen-part`
+  file, start). Resume across restarts through an `evergreen` property in the
+  saver's record. Started from `EvergreenStartup`; paused at quit.
+- Prefs `evergreen.downloads.*` (enabled, connections, minSizeMB, maxSizeGB,
+  excludeHosts, log).
+- Smoke check "accelerated downloads": a local range server with throttling
+  (`DownloadServer` in `smoke_test.py`): several connections at once, cut
+  connections retried, pause and resume, files left alone, a server that lies
+  about ranges, and the off switch.
+- **Not verified until CI says so** (see the next section's results): the whole
+  Firefox side. Things most likely to need a fix: taking over a legacy download
+  (`download.cancel()` then restart), `nsIFileOutputStream` seek/`writeFrom`,
+  the resume path at startup, and the `_checkReputationAndMove` inheritance.
+
 ## Current state (v0.1.1, as released)
 
 **Released, v0.1.1** (built on Firefox 157.0, run 37249999440):
@@ -250,6 +291,7 @@ into every browser window; registered by patch 0001; see design.md §6):
 | `EvergreenSearch.sys.mjs` | Start page and `Ctrl+T` search box (overlay over the page area), history suggestions |
 | `Spaces.sys.mjs`, `SpacesStore.sys.mjs` | Spaces model and its JSON store in the profile |
 | `Archive.sys.mjs`, `ArchiveStore.sys.mjs` | Archive policy and store |
+| `DownloadPlan.sys.mjs`, `EvergreenDownloads.sys.mjs` | Accelerated downloads (logic; Firefox side). See download-manager.md |
 | `SearchDefaults.sys.mjs` | Ecosia as default, kept unless the user changes it; `getSearchService` (156+ moved the service to a module) |
 | `evergreen.css` | All window styling |
 
@@ -344,16 +386,9 @@ Other places:
    search the Archive), split view on Firefox's native one, Peek, mini window,
    link routing (design.md §7).
 5. Prefs audit and egress test (M0), then code signing (M3).
-6. **Download manager** (requested by the user, not started): an IDM-style
-   accelerated, resumable, queued downloader that takes over Firefox's
-   downloads, built in or as a bundled add-on, on an open-source engine (the
-   user named something like "Mister"; the exact project is unconfirmed, so
-   ask). Likely shape: engine as a separate local helper process (aria2-style,
-   bound to 127.0.0.1 with a random token), a small WebExtension (`downloads`
-   API / `webRequest` to hand off URLs, cookies and referrer) or a UI module in
-   `src/`, and a pref to switch it off. Needs a design note in design.md first
-   (threat model: a local RPC port, handing cookies to a helper, checksums for
-   the bundled binary, licences).
+6. Download manager, next: queue and global limits, a settings page, writes
+   on a worker for slow disks, taking over downloads made by extensions and
+   Firefox features (copy-saver downloads). See download-manager.md, "Not done yet".
 
 ## Conventions and preferences
 

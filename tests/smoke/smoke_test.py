@@ -1286,6 +1286,7 @@ class Run:
                 P.setBoolPref("evergreen.update.check", true);
                 let found = await EvergreenUpdate.check({ force: true });
                 out.state = found.state;
+                out.error = found.error;
                 out.version = found.release?.version;
                 // Where did the notice go? Look in every browser window, and say what is there if it is missing.
                 let wins = [...Services.wm.getEnumerator("navigator:browser")];
