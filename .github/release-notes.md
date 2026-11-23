@@ -22,6 +22,7 @@ Get-FileHash .\Evergreen-@VERSION@-win64-setup.exe -Algorithm SHA256
 - A compact **address bar** in the middle of the toolbar, as in Arc, with empty toolbar on both sides to drag the window by. It opens up to a wider bar while you type.
 - **Popup windows** (sign-in and payment windows that a page opens) get a slim header with a centred address pill and a rounded frame, and open centred over the window that opened them.
 - **Hide the sidebar** with the sidebar button next to the tree menu (or `Ctrl+Alt+Z`); move the mouse to the left edge of the window to slide it back in over the page. It slides away as soon as the mouse leaves.
+- A built-in **download manager**: large files download on several connections at once (faster on slow or throttled servers), retry from where they stopped when a connection drops, and resume after a restart. Turn it off with `evergreen.downloads.enabled` in `about:config`.
 - Installs add-ons from **addons.mozilla.org** like Firefox. Evergreen tells websites it is Firefox (the same User-Agent), so sites treat it as Firefox and it does not stand out.
 - On first run, Evergreen offers to **import** bookmarks, passwords and history from another browser on your computer.
 - Hardened defaults: HTTPS-Only, strict tracking protection, encrypted DNS (Quad9), no telemetry or studies compiled in, no sponsored content, AI features blocked, uBlock Origin bundled.

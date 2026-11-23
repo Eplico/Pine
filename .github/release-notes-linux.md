@@ -26,7 +26,7 @@ Evergreen keeps its own profile, separate from Firefox's, so it never touches an
 
 ### What's in Evergreen @VERSION@
 
-See the [Windows release notes](@REPO_URL@/releases) for the feature list: it is the same browser. In short: Arc-style Spaces, big Favorites tiles, a compact address bar with room to drag the window, Arc-style popup windows, an Archive for idle tabs, a start page and search box, hardened defaults, uBlock Origin and Ecosia as the default search engine. New on Linux: a proper app-menu entry and icon, one-click updates and carrying your data to a new installation.
+See the [Windows release notes](@REPO_URL@/releases) for the feature list: it is the same browser. In short: Arc-style Spaces, big Favorites tiles, a compact address bar with room to drag the window, Arc-style popup windows, an Archive for idle tabs, a start page and search box, hardened defaults, uBlock Origin and Ecosia as the default search engine. New in this release: a built-in **download manager** (large files download on several connections at once, retry from where they stopped and resume after a restart; set `evergreen.downloads.enabled` to `false` in `about:config` to use Firefox's own downloader), and, on Linux, a proper app-menu entry and icon, one-click updates and carrying your data to a new installation.
 
 ### Known limitations
 
