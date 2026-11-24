@@ -21,8 +21,6 @@ on:
         description: "Skip the build: test and publish the packages of this earlier run ID"
         required: false
         default: ""
-  push:
-    tags: ["v*"]  # v<Evergreen version>, e.g. v0.1 (must match VERSION)
 
 permissions:
   contents: write  # to publish releases
