@@ -25,7 +25,7 @@ after its class); it now waits for the icon.
 
 | What | State |
 |---|---|
-| Windows build on 160.0.1 | Two runs queued one behind the other (the workflow allows one at a time): `45288816571` (0.2, on `70f5e03`) and `45299144297` (0.3, on `301fc3e`). Neither had finished when this was written (the first compiles from a cold cache; earlier builds took 57-86 min, this one is past two hours). See "Next steps" 1. |
+| Windows 0.2 | Built (3 h 06 min cold), smoke-tested and installer-checked on 160.0.1 (run `45288816571`), but never published: its publish step got the 403 described below, and `VERSION` moved on to 0.3 before it was solved. There is no `v0.2` for Windows; `v0.3` supersedes it. |
 | Signed updates (design §9.4) and code signing | Need things only the owner can provide: a code-signing certificate, and an offline MAR signing key (see "Signing: what is needed"). Not started. |
 | Hook patches instead of the monkeypatches | Decided against, for now: see "Hook patches: the decision". |
 | Writes on a worker (slow disks) | Blocked by Firefox: `IOUtils` has no write at an offset (download-manager.md). |
@@ -52,9 +52,9 @@ product is **Evergreen**.
 | What | Where |
 |---|---|
 | Code | GitHub `Eplico/Pine`, branch `claude/relaxed-bardeen-ojrswr` (all work so far; no pull request has been opened) |
-| Releases | <https://github.com/Eplico/Pine/releases>: **v0.3-linux**, v0.2-linux (2026-11-24), then the Windows ones: v0.1.1 (latest), v0.1, two older `v157.0-N` previews. `v0.2` for Windows follows the Windows build run (Next steps 1) |
+| Releases | <https://github.com/Eplico/Pine/releases>: **v0.3** (Windows, built on Firefox 160.0.1, run `45299144297`, published 2026-11-24 04:32 UTC), **v0.3-linux**, v0.2-linux, then v0.1.1, v0.1 and two older `v157.0-N` previews |
 | CI | `.github/workflows/ci.yml` on every push: lint, unit and tooling tests, patch and pref checks against the pinned Firefox, smoke test in Firefox on Linux (the pinned 160.0.1) and Windows (the runner's Firefox) |
-| Windows build | `.github/workflows/windows-build.yml`, started by hand (Actions › Windows build › Run workflow) or by pushing a `v<VERSION>` tag. About 90 minutes |
+| Windows build | `.github/workflows/windows-build.yml`, started by hand (Actions › Windows build › Run workflow). 1 to 3 hours (a cold compile cache) |
 | Design | `docs/design.md`: goals, threat model, architecture, features, decisions (Q1–Q11), milestones |
 | Developer guide | `docs/development.md`: dev harness, tests, building on Windows, patches, releasing |
 
@@ -462,6 +462,27 @@ Other places:
 - "Evergreen" is a common software name (Microsoft's WebView2 runtime); check
   for conflicts before any public launch (design.md Q10).
 
+## Publishing releases: the 403
+
+Symptom: `gh release create` (and creating any tag) failed with `HTTP 403:
+Resource not accessible by integration` although the token had `contents: write`.
+**Cause** (found by trying combinations, 2026-11-24): GitHub refuses a release or
+tag whose **target commit's `.github/workflows` differ from those of the commit the
+workflow run is on**. The workflows used `--target <the commit the packages were
+built from>`; after workflow files changed in between (they did, several times,
+while a 3-hour Windows build ran) the build commit was refused. A target of
+`$GITHUB_SHA` (the run's own commit) is always accepted. All publish steps now use
+`--target "$GITHUB_SHA"`; the build commit stays in the release notes' links and the
+run URL, so a release's tag can point at a later commit than the one built. To keep
+them identical, do not touch `.github/workflows/` between a build and its publish
+(a publish with `from_run` runs on the branch's current commit).
+
+Other changes made on the way: the Windows workflow publishes from a small Linux
+job (`publish`), no longer triggers on a pushed `v*` tag (run it from the Actions
+page), and `linux-build.yml` has a `windows_from_run` input that publishes a Windows
+run's package from the Linux workflow (a leftover of the search; it works, and
+is a way to publish a Windows package if its own workflow ever fails again).
+
 ## Hook patches: the decision
 
 The handoff used to list "turn the monkeypatches into hook patches" as a task.
@@ -498,18 +519,18 @@ a cloud session.
 
 ## Next steps, in order
 
-1. **Windows build** `45288816571` (on `70f5e03`, *Publish* ticked): publishes `v0.2`
-   as Latest only if its smoke test and installer check pass; it has never run on
-   160.0.1. Check it (`curl https://api.github.com/repos/Eplico/Pine/actions/runs/45288816571/jobs`);
-   if it failed read the job log, fix, push, rerun (`from_run` re-tests a package
-   without recompiling). Then verify the release like `v0.2-linux` was verified
-   (download, `sha256sum -c SHA256SUMS.txt`).
-2. **0.3 release**: bump `VERSION` to `0.3` (five characters at most), update
-   `.github/release-notes.md` and `release-notes-linux.md` (command bar, routing,
-   Peek, split view, download queue, audit), push, wait for CI, run both build
-   workflows with *Publish* ticked. Only publish a build whose smoke test passed
-   (standing permission from the owner). Check for newer Firefox security releases
-   first ("Urgent" below; `FIREFOX_160_0_1_RELEASE` was the newest on 2026-11-24).
+1. **0.3 is released** on both platforms. For the next release: bump `VERSION`
+   (five characters at most), update `.github/release-notes.md` and
+   `release-notes-linux.md`, push, wait for CI, run both build workflows with
+   *Publish* ticked (Windows compiles in 1-3 h; one Windows run at a time). Only
+   publish a build whose smoke test passed (standing permission from the owner).
+   Check for newer Firefox security releases first ("Urgent" below;
+   `FIREFOX_160_0_1_RELEASE` was the newest on 2026-11-24). **Do not push workflow
+   changes between a build and its publish** (see "Publishing releases: the 403").
+2. Still unchecked on the Windows 0.3 release: the new workflow step that installs
+   it silently, starts it and uninstalls (`continue-on-error`; it is in the 0.3
+   run's log only if it ran: that run started before the step existed, so run
+   `windows-build.yml` with `from_run` once and read it), and a person installing it.
 3. The owner installs with `python3 evergreen-install` from the Linux release and
    accepts the "use my earlier data" offer, then uses the command bar, Peek and
    routing for a while: **nothing from M2 has been used by a person yet**, only

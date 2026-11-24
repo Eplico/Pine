@@ -125,7 +125,7 @@ Releases are built by the **Windows build** workflow
 
 1. Set the version in `VERSION` (e.g. `0.1`; each version is published
    once). On GitHub: **Actions › Windows build › Run workflow** (leave
-   *Publish* ticked). Or push the matching tag, e.g. `v0.1`.
+   *Publish* ticked). (Pushing a `v*` tag no longer starts it.)
 2. The *build* job installs MozillaBuild, fetches and verifies the Firefox
    source, builds Evergreen (about two hours from scratch; sccache makes
    later builds faster), packages the portable zip and the installer, and
