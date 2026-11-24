@@ -84,8 +84,25 @@ jobs:
           if ! ls release/*-setup.exe >/dev/null 2>&1; then
             sed -i '/^| `Evergreen-[^`]*-setup\.exe`/d' release-notes.md
           fi
-          gh release create "v$version" release/* --title "Evergreen $version for Windows" \
-            --notes-file release-notes.md --target "$sha"
+          if ! gh release create "v$version" release/* --title "Evergreen $version for Windows" \
+            --notes-file release-notes.md --target "$sha"; then
+            # Diagnostic (remove once the cause is known): which part is refused?
+            for tag in "v$version" "probe-$FROM_RUN"; do
+              for target in "$sha" "$GITHUB_SHA"; do
+                for notes in "release-notes.md" ""; do
+                  if [ -n "$notes" ]; then n=(--notes-file "$notes"); else n=(--notes x); fi
+                  name="$tag-d"
+                  if gh release create "$name" --draft --title t "${n[@]}" --target "$target" >/dev/null 2>&1; then
+                    echo "PROBE draft tag=$tag target=${target:0:7} notes=${notes:-short}: allowed"
+                    gh release delete "$name" --yes >/dev/null 2>&1 || true
+                  else
+                    echo "PROBE draft tag=$tag target=${target:0:7} notes=${notes:-short}: REFUSED"
+                  fi
+                done
+              done
+            done
+            exit 1
+          fi
 
   build:
     name: Build Evergreen for Linux
