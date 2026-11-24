@@ -1901,7 +1901,11 @@ class Run:
                 P.clearUserPref("evergreen.downloads.maxActive");
                 return out;
                 """,
-                self.files.url("/queue.bin"), self.files.url("/big.bin"), dl_dir,
+                self.files.url("/queue.bin"),
+                # Another host name for the same server: Firefox allows six connections per
+                # host, so a second download from the same host would queue there anyway.
+                self.files.url("/big.bin").replace("127.0.0.1", "localhost"),
+                dl_dir,
             )
             wf = r["whileFirstRuns"]
             assert not wf["firstDone"] and not wf["secondDone"] and wf["segmented"] == 1 and wf["waiting"] == 1, (
@@ -1971,6 +1975,7 @@ class Run:
                 url, dl_dir,
             )
             assert not before["succeeded"], f"the file finished before the browser was closed: {before}"
+            ranged_before = len(self.files.stats["/queue.bin"]["ranged"])
             self.errors_before_restart += self.js("return evergreenConsoleErrors();")
             self.quit()
             self.launch()
@@ -1991,8 +1996,9 @@ class Run:
             assert after["succeeded"] and after["sha"] == self.files.sha["/queue.bin"], f"the download did not finish after a restart: {before} {after}"
             ranged = self.files.stats["/queue.bin"]["ranged"]
             assert "resume" in after["events"], after
-            assert ranged and not any(r.startswith("bytes=0-") for r in ranged), (
-                f"after the restart the file should continue, not start again: {ranged}"
+            resumed = ranged[ranged_before:]
+            assert resumed and not any(r.startswith("bytes=0-") for r in resumed), (
+                f"after the restart the file should continue, not start again: {resumed}"
             )
             return f"closed at {before['bytes'] // 1024} KiB, finished after the restart from where it stopped"
 
