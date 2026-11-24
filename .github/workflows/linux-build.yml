@@ -23,6 +23,10 @@ on:
         description: "Skip the build: test and publish the package of this earlier run ID"
         required: false
         default: ""
+      windows_from_run:
+        description: "Publish the WINDOWS release from this earlier Windows build run (its tests must have passed); builds and tests nothing else"
+        required: false
+        default: ""
 
 permissions:
   contents: write  # to publish releases
@@ -36,9 +40,56 @@ env:
   EG_WORK_DIR: /home/runner/eg
 
 jobs:
+  # Publishes a Windows release built and tested by the Windows build workflow.
+  # The Windows workflow's own jobs get "HTTP 403: Resource not accessible by
+  # integration" creating releases (cause not found; this workflow's jobs can), so
+  # the release is created from here: run this workflow with `windows_from_run`
+  # set to the Windows run's ID and Publish ticked.
+  publish-windows:
+    name: Publish the Windows release
+    if: ${{ inputs.windows_from_run != '' && inputs.publish }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the Windows packages
+        uses: actions/download-artifact@v4
+        with:
+          name: evergreen-windows
+          path: release
+          run-id: ${{ inputs.windows_from_run }}
+          github-token: ${{ github.token }}
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FROM_RUN: ${{ inputs.windows_from_run }}
+        run: |
+          version=$(tr -d '[:space:]' < VERSION)
+          firefox=$(python3 -c "import json; print(json.load(open('upstream.json'))['firefox']['version'])")
+          if [ ! -f "release/Evergreen-$version-win64-portable.zip" ]; then
+            echo "The packages are not Evergreen $version's (VERSION changed since that build?)"; exit 1
+          fi
+          sha=$(gh run view "$FROM_RUN" --repo "$GITHUB_REPOSITORY" --json headSha --jq .headSha)
+          sed -e "s|@VERSION@|$version|g" -e "s|@FIREFOX@|$firefox|g" -e "s|@SHA@|$sha|g" \
+              -e "s|@REPO_URL@|$GITHUB_SERVER_URL/$GITHUB_REPOSITORY|g" \
+              -e "s|@RUN_URL@|$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$FROM_RUN|g" \
+              .github/release-notes.md > release-notes.md.tmp
+          python3 - <<'PY'
+          notes = open("release-notes.md.tmp", encoding="utf-8").read()
+          sums = open("release/SHA256SUMS.txt", encoding="utf-8").read().strip()
+          open("release-notes.md", "w", encoding="utf-8").write(notes.replace("@SHA256SUMS@", sums))
+          PY
+          if ! ls release/*-setup.exe >/dev/null 2>&1; then
+            sed -i '/^| `Evergreen-[^`]*-setup\.exe`/d' release-notes.md
+          fi
+          gh release create "v$version" release/* --title "Evergreen $version for Windows" \
+            --notes-file release-notes.md --target "$sha"
+
   build:
     name: Build Evergreen for Linux
-    if: ${{ !inputs.from_run }}
+    if: ${{ !inputs.from_run && !inputs.windows_from_run }}
     runs-on: ubuntu-24.04
     timeout-minutes: 355
     env:
@@ -133,7 +184,7 @@ jobs:
   test-and-publish:
     name: Smoke test and publish
     needs: build
-    if: ${{ always() && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.from_run != '')) }}
+    if: ${{ always() && !inputs.windows_from_run && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.from_run != '')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
