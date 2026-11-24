@@ -1,10 +1,36 @@
 # Evergreen: handoff
 
-Written 2026-11-21, updated 2026-11-24. It describes the state of the branch
-`claude/determined-cerf-v1dp7l` (Evergreen **0.2**, on Firefox **160.0.1**, not
-yet released) and the published release **v0.1.1**. See "Update, 0.2" below
-for what changed since the first version of this document. Read this first, then [design.md](design.md) (the why)
-and [development.md](development.md) (the how).
+Written 2026-11-21, last updated 2026-11-24. It describes the branch
+`claude/relaxed-bardeen-ojrswr` (Evergreen **0.3** in progress, on Firefox
+**160.0.1**; the same history as `claude/determined-cerf-v1dp7l`). Published:
+**v0.2-linux** (Linux, 2026-11-24), v0.1.1 (Windows, latest). **Start with
+"Where we are" right below**, then [design.md](design.md) (the why),
+[development.md](development.md) (the how), [download-manager.md](download-manager.md)
+and [prefs-audit.md](prefs-audit.md).
+
+## Where we are (2026-11-24, end of the 0.3 session)
+
+**Done and verified in a real Firefox 160 (CI smoke test, Linux and Windows):**
+the command bar, link routing, Peek and mini windows, split view from the
+command bar, the download manager (queue, global limit, extension downloads,
+resume after a restart), a recording of what the browser contacts, and the
+prefs audit. `v0.2-linux` is published (its smoke test and the desktop
+integration check passed on the real build; the tarball and `evergreen-install`
+match `SHA256SUMS.txt`).
+
+**Not done, and why (so nobody has to rediscover it):**
+
+| What | State |
+|---|---|
+| Windows build on 160.0.1 | Run `45288816571` was still compiling when this was written; see "Next steps" 1. |
+| Signed updates (design §9.4) and code signing | Need things only the owner can provide: a code-signing certificate, and an offline MAR signing key (see "Signing: what is needed"). Not started. |
+| Hook patches instead of the monkeypatches | Decided against, for now: see "Hook patches: the decision". |
+| Writes on a worker (slow disks) | Blocked by Firefox: `IOUtils` has no write at an offset (download-manager.md). |
+| Download settings page | Replaced by commands in the command bar (design §7.5). No `about:` page. |
+| Peek as an in-page sheet | Peek is Firefox's mini window (a small separate window), not Arc's sheet. |
+| Link routing UI beyond the command bar | Rules are a JSON pref; no editor listing them. |
+| Wayland check of the desktop entry | Still X11 only. |
+| Running the Windows installer from the in-app update | The Windows build workflow now installs silently, starts and uninstalls (`continue-on-error` until it has passed once); the in-app path itself (button, quit, installer opens) is untested. |
 
 ## In one paragraph
 
@@ -22,14 +48,14 @@ product is **Evergreen**.
 
 | What | Where |
 |---|---|
-| Code | GitHub `Eplico/Pine`, branch `claude/determined-cerf-v1dp7l` (all work so far; no pull request has been opened) |
-| Releases | <https://github.com/Eplico/Pine/releases>: **v0.1.1** (latest, 2026-10-05), v0.1, and two older `v157.0-N` previews |
+| Code | GitHub `Eplico/Pine`, branch `claude/relaxed-bardeen-ojrswr` (all work so far; no pull request has been opened) |
+| Releases | <https://github.com/Eplico/Pine/releases>: **v0.2-linux** (2026-11-24), then the Windows ones: v0.1.1 (latest), v0.1, two older `v157.0-N` previews. `v0.2` for Windows follows the Windows build run (Next steps 1) |
 | CI | `.github/workflows/ci.yml` on every push: lint, unit and tooling tests, patch and pref checks against the pinned Firefox, smoke test in Firefox on Linux (the pinned 160.0.1) and Windows (the runner's Firefox) |
 | Windows build | `.github/workflows/windows-build.yml`, started by hand (Actions › Windows build › Run workflow) or by pushing a `v<VERSION>` tag. About 90 minutes |
 | Design | `docs/design.md`: goals, threat model, architecture, features, decisions (Q1–Q11), milestones |
 | Developer guide | `docs/development.md`: dev harness, tests, building on Windows, patches, releasing |
 
-## Update, 0.2 (unreleased)
+## Update, 0.2 (Firefox 160, popups, pill, Favorites; released on Linux as v0.2-linux)
 
 Done in a later session, all on this branch:
 
@@ -131,7 +157,48 @@ a pinned copy turned into a blank page that could not be reopened.
 - The updater trusts GitHub + TLS only (the checksums are in the same release).
   Signed MAR updates (M3) are still the real fix; see design.md §9.4.
 
-## Update, 0.3 (download manager; CI findings)
+## Update, 0.3 (command bar, routing, Peek, downloads, audit)
+
+All on this branch, all with unit tests and smoke checks that ran green in CI.
+
+- **Command bar** (`Commands.sys.mjs`, pure and tested; actions carried out by
+  `EvergreenWindow.runCommand`; rows drawn by `EvergreenSearch`). `Ctrl+T`, type;
+  `>` lists commands only. Commands: switch Space, move tab, keep tab, switch to an
+  open tab (any Space), reopen from the Archive, new Space, split view / close
+  split view, pop out to a mini window, route this site to a Space, and settings
+  (`SETTINGS`: the only prefs a `set-pref` action may change). To add a command:
+  add a row in `matchCommands`, an action `type` in `runCommand`, Fluent strings,
+  a unit test and a line in the smoke check `command_bar`.
+- **Split view**: Firefox's own. `BrowserCommands.addTabSplitView()` /
+  `separateTabSplitView()`. Verified that it opens and closes; not looked at by eye
+  beyond a screenshot.
+- **Link routing** (`LinkRouting.sys.mjs`): `evergreen.routing.rules` JSON. Applies to
+  new tabs from the browser's own UI (the `openTrustedLinkIn` wrapper) and to
+  links from other apps (TabOpen's `detail.fromExternal`, then the first page load:
+  `onExternalLoad`; a different container means reopening the page). Never to
+  navigation inside a tab or to links clicked on pages.
+- **Peek**: a tab opened from a Favorite that first loads a web page on another
+  site, in the foreground, is popped into Firefox's mini window
+  (`MiniWindowManager.popTab`). `evergreen.peek.enabled`. Also the command "Pop out
+  to a mini window" and `evergreen.externalLinks.miniWindow` (off).
+- **Download manager** additions: `maxActive` queue, `maxConnections` budget
+  (`Limiter`), adoption of extension/Firefox-feature downloads (`probe`), resume
+  after a real browser restart verified. Details in download-manager.md.
+- **Prefs audit**: `eg.py audit-prefs`, 28 prefs adopted, reasons for the rest in
+  prefs-audit.md. `browser.region.*` set to stop the location lookup.
+- **Egress test**: `smoke_test.py --egress` (Linux CI) with an allow-list
+  (`tests/smoke/egress-allowed.txt`). A new host there is a failing test on purpose.
+- **Things learned the hard way** (all in code comments too): `win.browserDOMWindow`
+  is an XPCOM wrapper, its methods are read-only from JS (assigning threw and
+  stopped Evergreen loading; the smoke launch now prints the console errors when
+  that happens); Firefox keeps six connections per host, so two downloads from one
+  host queue in the network stack before our queue sees them; `moveTabToSpace`
+  reopens only recordable (http/https/file) pages, otherwise a blank tab; the
+  Firefox 160 sources of the tab strip live in `browser/components/tabbrowser/`
+  (`Tabbrowser.sys.mjs`, `content/tabs.mjs`) and the mini window in
+  `browser/components/miniwindow/`.
+
+## Update, 0.3 earlier in the session (download manager; CI findings)
 
 Same branch (`claude/relaxed-bardeen-ojrswr`). The user's ongoing permission:
 **publishing releases is allowed** once the build and its smoke test pass (do not
@@ -224,12 +291,13 @@ command bar, split view, Peek, the mini window, link routing (see
 
 ## Urgent: Firefox security updates
 
-Evergreen is pinned to **Firefox 157.0** (`upstream.json`). As of 2026-11-21
-Mozilla's GitHub mirror has release tags up to **`FIREFOX_160_0_1_RELEASE`**
-(157.0.1, 158.0, 158.0.1, 159.0, 159.0.1, 160.0 and 160.0.1 have all shipped since).
-Each of those carries security fixes that Evergreen users don't have, and
-Evergreen has no updater yet. Moving to the latest release is the most
-important next task:
+Evergreen is pinned to **Firefox 160.0.1** (`upstream.json`), the newest release tag on
+Mozilla's GitHub mirror as of 2026-11-24 (the released v0.1.1 for Windows is
+still on 157.0 and misses everything since: ship v0.2/v0.3 for Windows). Firefox
+ships security fixes every few weeks and Evergreen's in-app update only *tells*
+users (Linux updates in place; Windows downloads, checks and runs the installer),
+so each bump matters. Check the mirror for newer `FIREFOX_*_RELEASE` tags at the
+start of every session. To move to a new release:
 
 1. Set `firefox.version` in `upstream.json` to the new version and
    `sha512` to `null`.
@@ -257,18 +325,19 @@ Commands (`python eg.py <command>`; Python 3.11+):
 | `dev` | Runs Evergreen's UI inside a copy of an installed Firefox (fast loop; no build) |
 | `lint` | Patch headers and series, prefs file syntax |
 | `check-patches`, `check-prefs` | Against the pinned Firefox, via the GitHub mirror |
+| `audit-prefs` | Evergreen's prefs against arkenfox's user.js and Firefox's defaults (prefs-audit.md) |
 | `fetch`, `prepare`, `build`, `package`, `collect` | The real build (Windows; see development.md) |
 
 Tests:
 
-- `npm run lint` (ESLint with `no-unsanitized`) and `npm test` (36 Node unit
+- `npm run lint` (ESLint with `no-unsanitized`) and `npm test` (about 110 Node unit
   tests: Spaces model, archive policy, search defaults, start page/search box
   helpers).
-- `python -m unittest discover -s tests/python` (35 tooling tests, including
+- `python -m unittest discover -s tests/python` (about 65 tooling tests, including
   the full prepare pipeline on a fake Firefox tarball and installer stub
   branding).
-- `python tests/smoke/smoke_test.py --firefox <Firefox dir> --headless`: 27
-  end-to-end checks in a real Firefox over Marionette (dev harness), or
+- `python tests/smoke/smoke_test.py --firefox <Firefox dir> --headless`: 38
+  end-to-end checks (`--egress` adds a network-egress check) in a real Firefox over Marionette (dev harness), or
   `--binary <evergreen.exe>` for a built Evergreen (the release workflow does
   this). Add `--screenshots <dir>` to save screenshots.
 - `tests/installer/check_installer.ps1 -Setup <setup.exe> [-Scale 150]`
@@ -301,7 +370,9 @@ into every browser window; registered by patch 0001; see design.md §6):
 | `EvergreenStartup.sys.mjs` | Startup and first-run steps (ETP, search default, import offer), purge hooks |
 | `EvergreenWindow.sys.mjs` | Per-window controller: sidebar UI, Spaces (switching, containers, tab bookkeeping), Archive panel, editor, keys, start-page tabs (`evergreen-blank`), last-tab handling, new tabs at the top |
 | `EvergreenLayout.sys.mjs` | Toolbar order and alignment, sidebar collapse and edge reveal |
-| `EvergreenSearch.sys.mjs` | Start page and `Ctrl+T` search box (overlay over the page area), history suggestions |
+| `EvergreenSearch.sys.mjs` | Start page and `Ctrl+T` search box (overlay over the page area), history suggestions, command rows |
+| `Commands.sys.mjs` | Command bar: matching and ranking of commands, the `SETTINGS` list (pure; unit-tested) |
+| `LinkRouting.sys.mjs` | Link-routing rules: parse, match, add, remove (pure; unit-tested) |
 | `Spaces.sys.mjs`, `SpacesStore.sys.mjs` | Spaces model and its JSON store in the profile |
 | `Archive.sys.mjs`, `ArchiveStore.sys.mjs` | Archive policy and store |
 | `DownloadPlan.sys.mjs`, `EvergreenDownloads.sys.mjs` | Accelerated downloads (logic; Firefox side). See download-manager.md |
@@ -351,9 +422,13 @@ Other places:
 
 ## Fragile points (check these on every Firefox bump)
 
-- Monkeypatches that a real build should eventually turn into small hook
-  patches: `window.openTrustedLinkIn`, `BrowserCommands.openTab`,
-  `SidebarController.handleToolbarButtonClick`/`updateToolbarButton`.
+- Monkeypatches (see "Hook patches: the decision"): `window.openTrustedLinkIn`,
+  `BrowserCommands.openTab`, `SidebarController.handleToolbarButtonClick`/
+  `updateToolbarButton`. Other Firefox pieces the code leans on: TabOpen's
+  `detail.fromExternal`; `BrowserCommands.addTabSplitView`/`separateTabSplitView`;
+  `MiniWindowManager.popTab` and the `mini-window` root attribute;
+  `DownloadCopySaver`/`DownloadLegacySaver` internals (`_checkReputationAndMove`,
+  `_unknownProperties`, `onTransferStarted`); `saveURL`'s argument list.
 - DOM ids and attributes used by the layout and tests: `#sidebar-main` /
   `#sidebar-container`, `#tabbrowser-tabbox`, `#vertical-tabs-newtab-button` /
   `#tabs-newtab-button`, `cmd_newNavigatorTab`, toolbar widget ids.
@@ -384,31 +459,63 @@ Other places:
 - "Evergreen" is a common software name (Microsoft's WebView2 runtime); check
   for conflicts before any public launch (design.md Q10).
 
-## Next steps, roughly in order
+## Hook patches: the decision
 
-1. **Builds in flight** (started 2026-11-23 on `70f5e03`, *Publish* ticked, so they
-   publish by themselves only if their smoke test passes): Linux build run
-   `45288812860` (publishes `v0.2-linux`), Windows build run `45288816571`
-   (first ever on Firefox 160.0.1; publishes `v0.2` as Latest). Check them with
-   `curl https://api.github.com/repos/Eplico/Pine/actions/runs?per_page=6`.
-   Read a failure in the job log (the smoke test and the Linux desktop check
-   `tests/linux/check_desktop_integration.py` print their results; that check is
-   still `continue-on-error` until it has passed once; the Windows run also runs
-   `check_installer.ps1`). Fix, push, rerun (`from_run` re-tests a package
-   without recompiling). If both published: verify the releases, then install
-   with `python3 evergreen-install` from the Linux release and accept the "use my
-   earlier data" offer (the user does this). Check for newer Firefox security
-   releases first (see "Urgent"; 160.0.1 was newest on 2026-11-23).
-2. Signed updates (M3, design.md §9.4). The Windows in-app update exists
-   (download, check, run the installer) but running the installer is untested.
-3. Turn the monkeypatches listed above into small hook patches.
-4. M2 features: command bar (grow the `Ctrl+T` box: switch Space, move tab,
-   search the Archive), split view on Firefox's native one, Peek, mini window,
-   link routing (design.md §7).
-5. Prefs audit and egress test (M0), then code signing (M3).
-6. Download manager, next: queue and global limits, a settings page, writes
-   on a worker for slow disks, taking over downloads made by extensions and
-   Firefox features (copy-saver downloads). See download-manager.md, "Not done yet".
+The handoff used to list "turn the monkeypatches into hook patches" as a task.
+Recommendation: **do not**, unless a Firefox bump breaks one. Reasons: each wrapper
+is covered by a smoke check that fails loudly (that is how every 157 -> 160 change
+was found), so the rebase cost is already visible and small; a hook patch would sit
+in `browser.js`/`browser-commands.js`, the files Mozilla edits most, so it would
+conflict *more* often than a wrapper breaks; it can only be verified by a
+60-90 minute build, and a mistake there breaks Evergreen entirely, where a wrapper
+fails soft; the wrappers are also what lets the dev harness (no build) work. If it
+is ever done: one patch per hook (budget is 30), a header per design §5.3, hooks that
+call `window.EvergreenHooks?.x()` and fall back to Firefox's own behaviour, and keep
+the wrapper as the dev-harness path.
+
+## Signing: what is needed
+
+Both need decisions and secrets only the owner has; nothing here can be done from
+a cloud session.
+
+1. **Windows code signing** (SmartScreen warnings). A certificate (OV or EV, or
+   Azure Trusted Signing / SignPath for open source). Then a signing step in
+   `windows-build.yml` after "Package" for the installer and `evergreen.exe`, with the
+   certificate in a repository secret. Keep the same file names (the in-app update
+   and the checksums use them).
+2. **Signed updates** (design §9.4; replaces the "GitHub + TLS" trust in
+   `EvergreenUpdate`). Needs: a MAR signing key pair generated offline (the private
+   key as a repository secret, never in the repo); `--enable-updater` in the
+   mozconfigs and a patch replacing the update certificates the updater trusts
+   (`toolkit/mozapps/update/updater/*.der`) with Evergreen's; complete MARs and an
+   update XML published as release assets (a static file: the updater's URL carries
+   placeholders, so one `update.xml` for the newest release per platform); then
+   `app.update.url` pointing at it. Verify on a real Windows build: an updater that
+   fails to apply is invisible until someone tries.
+
+## Next steps, in order
+
+1. **Windows build** `45288816571` (on `70f5e03`, *Publish* ticked): publishes `v0.2`
+   as Latest only if its smoke test and installer check pass; it has never run on
+   160.0.1. Check it (`curl https://api.github.com/repos/Eplico/Pine/actions/runs/45288816571/jobs`);
+   if it failed read the job log, fix, push, rerun (`from_run` re-tests a package
+   without recompiling). Then verify the release like `v0.2-linux` was verified
+   (download, `sha256sum -c SHA256SUMS.txt`).
+2. **0.3 release**: bump `VERSION` to `0.3` (five characters at most), update
+   `.github/release-notes.md` and `release-notes-linux.md` (command bar, routing,
+   Peek, split view, download queue, audit), push, wait for CI, run both build
+   workflows with *Publish* ticked. Only publish a build whose smoke test passed
+   (standing permission from the owner). Check for newer Firefox security releases
+   first ("Urgent" below; `FIREFOX_160_0_1_RELEASE` was the newest on 2026-11-24).
+3. The owner installs with `python3 evergreen-install` from the Linux release and
+   accepts the "use my earlier data" offer, then uses the command bar, Peek and
+   routing for a while: **nothing from M2 has been used by a person yet**, only
+   tested. Expect feedback on: Peek (a mini window, not a sheet), the length of the
+   command list, how split view looks in the sidebar.
+4. Signing (above), when the owner provides the certificate and key.
+5. Polish and gaps: a routing rules editor; split view as one row in the Space's
+   list (check by eye); folders; the temporary-container option for external links
+   (decision Q8); Wayland check; a speed limit for downloads.
 
 ## Conventions and preferences
 
@@ -417,9 +524,10 @@ Other places:
 - Commit messages explain what and why. Commits made by Claude end with:
   `Co-Authored-By: <the session's model> <noreply@anthropic.com>` and
   `Claude-Session: <session URL>`.
-- **Publishing a release is public: get the user's explicit go-ahead first.**
-  Building with *Publish* off and asking is the normal flow; publish from that
-  run with `from_run`.
+- **Publishing a release is public.** The owner has given standing permission to
+  publish once the build's smoke test passed (never publish a failing build);
+  say so in the reply when you do. Without that permission: build with *Publish*
+  off, ask, publish with `from_run`.
 - The user cares about the Arc feel: thin chrome, the sidebar out of the way,
   no visible empty "New Tab" tabs, Ecosia by default. Decisions Q1–Q11 are
   in design.md §12 (Windows first, no servers, non-commercial).
