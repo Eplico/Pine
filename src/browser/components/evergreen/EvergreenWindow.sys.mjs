@@ -220,7 +220,7 @@ class WindowController {
     this._cleanups.push(() => this.searchBar.stop());
 
     let tabs = this.gBrowser.tabContainer;
-    this.listen(tabs, "TabOpen", e => this.onTabOpen(e.target));
+    this.listen(tabs, "TabOpen", e => this.onTabOpen(e.target, e.detail));
     this.listen(tabs, "TabSelect", e => this.onTabSelect(e.target, e.detail?.previousTab));
     this.listen(tabs, "TabClose", e => this.onTabClose(e.target));
     this.listen(tabs, "SSTabRestored", e => this.updateBlank(e.target));
@@ -231,13 +231,17 @@ class WindowController {
           !webProgress.isTopLevel ||
           (stateFlags & (STATE_START | STATE_IS_DOCUMENT)) != (STATE_START | STATE_IS_DOCUMENT) ||
           !(request instanceof Ci.nsIChannel) ||
-          !request.loadInfo?.loadTriggeredFromExternal ||
-          !(request.URI.schemeIs("http") || request.URI.schemeIs("https"))
+          request.URI.spec == "about:blank"
         ) {
           return;
         }
         let tab = this.gBrowser.getTabForBrowser(browser);
-        if (tab && !tab.pinned) {
+        if (!tab?._evergreenExternal) {
+          return;
+        }
+        // Only the first page load of a tab opened for an outside link counts.
+        delete tab._evergreenExternal;
+        if (!tab.pinned && (request.URI.schemeIs("http") || request.URI.schemeIs("https"))) {
           try {
             this.onExternalLoad(tab, request);
           } catch (e) {
@@ -369,7 +373,12 @@ class WindowController {
     this.applySpace(active, { selectTab: false });
   }
 
-  onTabOpen(tab) {
+  onTabOpen(tab, detail) {
+    // A link from another app: Firefox flags the tab, and its first page load
+    // is handled in onExternalLoad (link routing, mini window).
+    if (detail?.fromExternal) {
+      tab._evergreenExternal = true;
+    }
     // A preloaded new-tab page arrives already loaded, with no location
     // change to report it.
     this.updateBlank(tab);
@@ -653,9 +662,8 @@ class WindowController {
   }
 
   /**
-   * Links from other apps: Firefox opens them in a new tab whose first load is
-   * flagged as coming from outside (LOAD_FLAGS_FROM_EXTERNAL, nsILoadInfo's
-   * loadTriggeredFromExternal). A routed site is moved to its Space; with
+   * Links from other apps: Firefox opens them in a new tab and says so in the
+   * TabOpen event (`detail.fromExternal`). A routed site is moved to its Space; with
    * evergreen.externalLinks.miniWindow the tab pops out into a mini window.
    * (The window's browserDOMWindow cannot be wrapped: it is an XPCOM object
    * whose methods are read-only from JS.)

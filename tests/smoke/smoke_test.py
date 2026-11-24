@@ -162,6 +162,7 @@ class DownloadServer:
       /norange.bin no Accept-Ranges
       /lie.bin     says it accepts ranges, then answers a range request with the whole file
       /small.bin   byte ranges, 1 MiB
+      /queue.bin   byte ranges, 32 MiB, very slow (the queue check)
     Counters per path: ranged requests seen, most at once, requests cut short.
     """
 
@@ -173,6 +174,7 @@ class DownloadServer:
         "/norange.bin": dict(size=12 * MiB, delay=0.002, ranges=False),
         "/lie.bin": dict(size=12 * MiB, delay=0.002, lie=True),
         "/small.bin": dict(size=1 * MiB, delay=0),
+        "/queue.bin": dict(size=32 * MiB, delay=0.1),  # slow enough to still be running 3 seconds in
     }
     CHUNK = 64 * 1024
 
@@ -855,8 +857,8 @@ class Run:
                   url: inTab.linkedBrowser.currentURI.spec };
                 cleanUp();
                 gB.removeTab(inTab);
-                // A link from another app (Firefox opens it as a tab whose load is
-                // flagged "from external") follows the rule too.
+                // A link from another app (Firefox opens it as a tab and says so
+                // in the TabOpen event) follows the rule too.
                 c.applySpace(work.id);
                 let ext = gB.addTab(pageExt, { fromExternal: true,
                   triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() });
@@ -1897,14 +1899,14 @@ class Run:
                 P.clearUserPref("evergreen.downloads.maxActive");
                 return out;
                 """,
-                self.files.url("/pause.bin"), self.files.url("/big.bin"), dl_dir,
+                self.files.url("/queue.bin"), self.files.url("/big.bin"), dl_dir,
             )
             wf = r["whileFirstRuns"]
             assert not wf["firstDone"] and not wf["secondDone"] and wf["segmented"] == 1 and wf["waiting"] == 1, (
                 f"the second download should wait for a place: {r}"
             )
             assert r["a"] and r["b"] and r["segmented"] == 2, r
-            assert r["shaA"] == self.files.sha["/pause.bin"] and r["shaB"] == self.files.sha["/big.bin"], r
+            assert r["shaA"] == self.files.sha["/queue.bin"] and r["shaB"] == self.files.sha["/big.bin"], r
             out.append("a second download waits for a place, then runs")
 
             # 9. A download made by an extension or a Firefox feature (a plain
