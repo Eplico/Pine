@@ -226,59 +226,61 @@ jobs:
             C:\eg\dev\installer-ui\
           if-no-files-found: ignore
 
+  # Publishing runs on a Linux runner. The Windows job's own token got
+  # "HTTP 403: Resource not accessible by integration" creating releases (runs
+  # 45288816571 and 45299144297, both with contents: write), while the same call
+  # from the Linux workflow works; so the release is created from here.
+  publish:
+    name: Publish the release
+    needs: test-and-publish
+    if: ${{ success() && (github.event_name == 'push' || inputs.publish) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the packages
+        uses: actions/download-artifact@v4
+        with:
+          name: evergreen-windows
+          path: release
+          run-id: ${{ inputs.from_run || github.run_id }}
+          github-token: ${{ github.token }}
+
       - name: Publish GitHub release
-        if: success() && (github.event_name == 'push' || inputs.publish)
         env:
           GH_TOKEN: ${{ github.token }}
           FROM_RUN: ${{ inputs.from_run }}
         run: |
-          $version = (Get-Content VERSION -Raw).Trim()
-          $firefox = (Get-Content upstream.json | ConvertFrom-Json).firefox.version
-          if (-not (Test-Path "release\Evergreen-$version-win64-portable.zip")) {
-            throw "The packages are not Evergreen $version's (VERSION changed since that build?)"
-          }
+          version=$(tr -d '[:space:]' < VERSION)
+          firefox=$(python3 -c "import json; print(json.load(open('upstream.json'))['firefox']['version'])")
+          if [ ! -f "release/Evergreen-$version-win64-portable.zip" ]; then
+            echo "The packages are not Evergreen $version's (VERSION changed since that build?)"; exit 1
+          fi
           # The commit the packages were built from.
-          $sha = $env:GITHUB_SHA
-          if ($env:FROM_RUN) {
-            $sha = gh run view $env:FROM_RUN --repo $env:GITHUB_REPOSITORY --json headSha --jq .headSha
-          }
-          $runId = if ($env:FROM_RUN) { $env:FROM_RUN } else { $env:GITHUB_RUN_ID }
-          $notes = (Get-Content .github\release-notes.md -Raw) `
-            -replace '@VERSION@', $version `
-            -replace '@FIREFOX@', $firefox `
-            -replace '@SHA@', $sha `
-            -replace '@REPO_URL@', "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY" `
-            -replace '@RUN_URL@', "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$runId" `
-            -replace '@SHA256SUMS@', (Get-Content release\SHA256SUMS.txt -Raw).Trim()
-          if (-not (Test-Path release\*-setup.exe)) {
+          sha=$GITHUB_SHA
+          run_id=$GITHUB_RUN_ID
+          if [ -n "$FROM_RUN" ]; then
+            sha=$(gh run view "$FROM_RUN" --repo "$GITHUB_REPOSITORY" --json headSha --jq .headSha)
+            run_id=$FROM_RUN
+          fi
+          sed -e "s|@VERSION@|$version|g" -e "s|@FIREFOX@|$firefox|g" -e "s|@SHA@|$sha|g" \
+              -e "s|@REPO_URL@|$GITHUB_SERVER_URL/$GITHUB_REPOSITORY|g" \
+              -e "s|@RUN_URL@|$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$run_id|g" \
+              .github/release-notes.md > release-notes.md.tmp
+          # The notes end with the checksums (replacing the @SHA256SUMS@ marker).
+          python3 - <<'PY'
+          notes = open("release-notes.md.tmp", encoding="utf-8").read()
+          sums = open("release/SHA256SUMS.txt", encoding="utf-8").read().strip()
+          open("release-notes.md", "w", encoding="utf-8").write(notes.replace("@SHA256SUMS@", sums))
+          PY
+          if ! ls release/*-setup.exe >/dev/null 2>&1; then
             # No installer among the packages; do not advertise one.
-            $notes = $notes -replace '(?m)^\| `Evergreen-[^`]*-setup\.exe`.*\r?\n', ''
-          }
-          Set-Content -Path release-notes.md -Value $notes -Encoding utf8
-          $files = Get-ChildItem release\* | ForEach-Object { $_.FullName }
-          # A numbered release (shown as the repository's latest). A version is
-          # published once; bump VERSION for the next release.
-          $title = "Evergreen $version for Windows"
-          # (Run 45288816571 failed here once with "HTTP 403: Resource not accessible by
-          # integration" although the token had contents: write. Retry, and say what the
-          # token can see, so the next failure explains itself.)
-          $created = $false
-          foreach ($attempt in 1..3) {
-            if ($env:GITHUB_REF_TYPE -eq 'tag') {
-              gh release create $env:GITHUB_REF_NAME @files --title $title --notes-file release-notes.md --verify-tag
-            } else {
-              # From the second attempt on, without asking for "latest" (the Linux
-              # workflow never does, and its releases publish).
-              $latest = if ($attempt -gt 1) { @('--latest=false') } else { @() }
-              gh release create "v$version" @files --title $title --notes-file release-notes.md --target $sha @latest
-            }
-            if ($LASTEXITCODE -eq 0) { $created = $true; break }
-            "release attempt $attempt failed (exit $LASTEXITCODE)"
-            gh api "repos/$env:GITHUB_REPOSITORY" --jq '{permissions, default_branch, visibility}'
-            gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=3" --jq '.[].tag_name'
-            Start-Sleep -Seconds (20 * $attempt)
-          }
-          if (-not $created) { throw "could not create the release" }
-          # Make it the repository's latest release if it was created without that.
-          gh release edit "v$version" --latest 2>&1 | Write-Host
-          $global:LASTEXITCODE = 0  # the release exists; being "latest" is a courtesy
+            sed -i '/^| `Evergreen-[^`]*-setup\.exe`/d' release-notes.md
+          fi
+          title="Evergreen $version for Windows"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            gh release create "$GITHUB_REF_NAME" release/* --title "$title" --notes-file release-notes.md --verify-tag
+          else
+            gh release create "v$version" release/* --title "$title" --notes-file release-notes.md --target "$sha"
+          fi
