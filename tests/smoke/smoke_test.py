@@ -824,7 +824,26 @@ class Run:
             sp = r["split"]
             if sp["available"]:
                 assert sp.get("on") and sp.get("off"), f"split view should open and close: {r}"
+            # The box with commands listed, for a look at it (the log carries the picture).
+            self.js(
+                """
+                w.BrowserCommands.openTab();
+                await sleep(100);
+                let input = w.document.getElementById("evergreen-search-input");
+                input.value = "> ";
+                input.dispatchEvent(new w.Event("input", { bubbles: true }));
+                await until(() => w.document.querySelector('.evergreen-search-result[data-kind="command"]'), 3000)
+                  .catch(() => null);
+                await sleep(200);
+                """
+            )
             self.shot("command-bar")
+            self.js(
+                """
+                let input = w.document.getElementById("evergreen-search-input");
+                input.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+                """
+            )
             return "> commands run, mixed with search, open tabs found" + (", split view" if sp["available"] else "")
 
         def link_routing():
