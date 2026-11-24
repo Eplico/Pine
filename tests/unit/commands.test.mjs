@@ -172,3 +172,9 @@ test("settings: every offered action passes validSetting, nothing else does", ()
   assert.equal(validSetting(null), false);
   assert.ok(Object.isFrozen(SETTINGS));
 });
+
+test("close split view is offered even where the tab looks like a start page", () => {
+  let tab = { pinned: false, isStartPage: true, kept: false, split: true };
+  assert.deepEqual(matchCommands("close split", context({ tab }))[0].action, { type: "unsplit" });
+  assert.equal(matchCommands("> split", context({ tab: { ...tab, split: false } })).length, 0);
+});

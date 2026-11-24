@@ -33,6 +33,7 @@ export class Limiter {
   constructor(limit = 0) {
     this.limit = limit;
     this.active = 0;
+    this.peak = 0; // the most places held at once since the last reset
     this.waiters = [];
   }
 
@@ -71,6 +72,7 @@ export class Limiter {
       let waiter = this.waiters.shift();
       waiter.settled = true;
       this.active++;
+      this.peak = Math.max(this.peak, this.active);
       let released = false;
       waiter.resolve(() => {
         if (!released) {

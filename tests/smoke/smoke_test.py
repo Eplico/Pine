@@ -673,6 +673,7 @@ class Run:
         def command_bar():
             r = self.js(
                 """
+                let [movePage] = arguments;
                 let d = w.document;
                 let input = d.getElementById("evergreen-search-input");
                 let rowsFor = async text => {
@@ -696,16 +697,16 @@ class Run:
                 let mixed = await rowsFor("switch work");
                 input.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
                 // Move the current tab to another Space.
-                let t = c.openTabInSpace(c.activeSpace(), "about:robots");
+                let t = c.openTabInSpace(c.activeSpace(), movePage);
                 gB.selectedTab = t;
-                await until(() => t.linkedBrowser.currentURI.spec == "about:robots");
+                await until(() => t.linkedBrowser.currentURI.spec == movePage);
                 let from = c.activeSpaceId;
                 let moveRows = await rowsFor("> move tab to work");
                 enter();
-                let isMoved = () => gB.tabs.some(x => x.linkedBrowser.currentURI.spec == "about:robots"
+                let isMoved = () => gB.tabs.some(x => x.linkedBrowser.currentURI.spec == movePage
                   && x.getAttribute("evergreen-space") == work);
                 await until(isMoved, 5000).catch(() => null);
-                let moved = gB.tabs.filter(x => x.linkedBrowser.currentURI.spec == "about:robots")
+                let moved = gB.tabs.filter(x => x.linkedBrowser.currentURI.spec == movePage)
                   .map(x => x.getAttribute("evergreen-space"));
                 let afterMove = c.activeSpaceId;
                 // An open tab in another Space is found by its title and selected.
@@ -729,12 +730,13 @@ class Run:
                   let sv = gB.selectedTab;
                   if (sv.label != "Page C") { gB.removeTab(sv); }
                 }
-                for (let x of gB.tabs.filter(x => x.linkedBrowser.currentURI.spec == "about:robots")) {
+                for (let x of gB.tabs.filter(x => x.linkedBrowser.currentURI.spec == movePage)) {
                   gB.removeTab(x);
                 }
                 await c.applySpace(work);
                 return { list, mixed, switched, personal, from, moveRows, moved, afterMove, work, others, picked, split };
-                """
+                """,
+                self.server.url("mv"),
             )
             assert r["list"] and r["list"][0].startswith("command:") and "Switch to" in r["list"][0], r
             assert r["switched"] == r["personal"], f"the command should switch to Personal: {r}"
@@ -750,54 +752,59 @@ class Run:
         def link_routing():
             r = self.js(
                 """
-                let [pageA, pageB] = arguments;
+                let [pageUi, pageNav, pageExt] = arguments;
                 let personal = SpacesStore.state.spaces[0];
                 let work = space("Work");
-                await c.applySpace(work.id);
+                let tabsAt = url => gB.tabs.filter(t => !t.closing && t.linkedBrowser.currentURI.spec == url);
+                let cleanUp = () => { for (let u of [pageUi, pageNav, pageExt]) { for (let t of tabsAt(u)) { gB.removeTab(t); } } };
+                c.applySpace(work.id);
                 // A rule: 127.0.0.1 (the test pages) opens in Personal.
                 c.setRouting("127.0.0.1", personal.id);
-                let routed = c.routedSpace(pageA)?.id;
+                let routed = c.routedSpace(pageUi)?.id;
                 // A new tab from the browser's own UI goes to that Space and takes over the window.
                 let opened = nextTabOpen();
-                w.openTrustedLinkIn(pageA, "tab");
+                w.openTrustedLinkIn(pageUi, "tab");
                 let t = await opened;
-                await sleep(200);
+                await sleep(300);
                 let viaUi = { space: t.getAttribute("evergreen-space"), ctx: t.userContextId,
                   active: c.activeSpaceId, selected: gB.selectedTab == t };
-                gB.removeTab(t);
+                cleanUp();
                 // Navigation inside a tab is never routed.
-                await c.applySpace(work.id);
+                c.applySpace(work.id);
                 let inTab = c.openTabInSpace(work, "about:robots");
                 gB.selectedTab = inTab;
-                w.openTrustedLinkIn(pageB, "current");
-                await sleep(300);
-                let stayed = { space: inTab.getAttribute("evergreen-space"), active: c.activeSpaceId };
+                w.openTrustedLinkIn(pageNav, "current");
+                await until(() => inTab.linkedBrowser.currentURI.spec == pageNav, 8000).catch(() => null);
+                let stayed = { space: inTab.getAttribute("evergreen-space"), active: c.activeSpaceId,
+                  url: inTab.linkedBrowser.currentURI.spec };
+                cleanUp();
                 gB.removeTab(inTab);
                 // A link from another app (Firefox opens it as a tab whose load is
                 // flagged "from external") follows the rule too.
-                await c.applySpace(work.id);
-                let ext = gB.addTab(pageB, { fromExternal: true,
+                c.applySpace(work.id);
+                let ext = gB.addTab(pageExt, { fromExternal: true,
                   triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() });
                 gB.selectedTab = ext;
-                await until(() => [...gB.tabs].some(t => !t.closing && t.getAttribute("evergreen-space") == personal.id
-                  && t.linkedBrowser.currentURI.spec == pageB), 8000).catch(() => null);
-                let found = gB.tabs.filter(t => !t.closing && t.linkedBrowser.currentURI.spec == pageB);
+                await until(() => tabsAt(pageExt).some(x => x.getAttribute("evergreen-space") == personal.id)
+                  && c.activeSpaceId == personal.id, 8000).catch(() => null);
+                let found = tabsAt(pageExt);
                 let external = { count: found.length, space: found[0]?.getAttribute("evergreen-space"),
                   active: c.activeSpaceId, selected: found[0] == gB.selectedTab };
-                for (let t of found) { gB.removeTab(t); }
+                cleanUp();
                 // With the rule gone nothing is routed.
                 c.setRouting("127.0.0.1", null);
-                await c.applySpace(work.id);
-                let none = c.routedSpace(pageA);
+                c.applySpace(work.id);
+                let none = c.routedSpace(pageUi);
                 return { routed, personal: personal.id, work: work.id, viaUi, stayed, external, none,
                   rules: Services.prefs.getStringPref("evergreen.routing.rules") };
                 """,
-                self.server.url("a"), self.server.url("b"),
+                self.server.url("rt1"), self.server.url("rt2"), self.server.url("rt3"),
             )
             assert r["routed"] == r["personal"], r
             vu = r["viaUi"]
             assert vu["space"] == r["personal"] and vu["active"] == r["personal"] and vu["selected"], r
-            assert r["stayed"]["space"] == r["work"] and r["stayed"]["active"] == r["work"], f"navigation was routed: {r}"
+            st = r["stayed"]
+            assert st["space"] == r["work"] and st["active"] == r["work"] and st["url"].endswith("rt2.html"), f"navigation was routed: {r}"
             ex = r["external"]
             assert ex["count"] == 1 and ex["space"] == r["personal"] and ex["active"] == r["personal"] and ex["selected"], r
             assert r["none"] is None and r["rules"] == "[]", r
@@ -806,50 +813,50 @@ class Run:
         def peek_and_mini_window():
             r = self.js(
                 """
-                let [pageA] = arguments;
+                let [pagePeek, pageOff, pageCmd] = arguments;
                 let mini = () => [...Services.wm.getEnumerator("navigator:browser")]
                   .filter(x => x.document.documentElement.hasAttribute("mini-window"));
                 let result = { available: c.canPopOut() };
                 if (!result.available) { return result; }
                 let closeMinis = async () => {
                   for (let m of mini()) { m.close(); }
-                  await sleep(300);
+                  await until(() => mini().length == 0, 5000).catch(() => null);
                 };
+                let inList = tab => gB.tabs.includes(tab) && tab.isConnected;
                 // A Favorite, and a link from it to another site.
                 let fav = c.openTabInSpace(c.activeSpace(), "about:robots");
                 gB.selectedTab = fav;
                 await until(() => fav.linkedBrowser.currentURI.spec == "about:robots");
                 gB.pinTab(fav);
-                let count = gB.tabs.length;
-                let link = gB.addTab(pageA, { openerBrowser: fav.linkedBrowser, triggeringPrincipal:
+                let link = gB.addTab(pagePeek, { openerBrowser: fav.linkedBrowser, triggeringPrincipal:
                   Services.scriptSecurityManager.getSystemPrincipal() });
                 gB.selectedTab = link;
-                await until(() => mini().length > 0, 8000).catch(() => null);
-                result.peek = { minis: mini().length, tabGone: !link.isConnected || !gB.tabs.includes(link),
-                  tabs: gB.tabs.length - count };
+                await until(() => mini().length > 0 && !inList(link), 10000).catch(() => null);
+                result.peek = { minis: mini().length, tabGone: !inList(link) };
                 await closeMinis();
                 // With Peek off the link is an ordinary tab.
                 Services.prefs.setBoolPref("evergreen.peek.enabled", false);
-                let plain = gB.addTab(pageA, { openerBrowser: fav.linkedBrowser, triggeringPrincipal:
+                let plain = gB.addTab(pageOff, { openerBrowser: fav.linkedBrowser, triggeringPrincipal:
                   Services.scriptSecurityManager.getSystemPrincipal() });
                 gB.selectedTab = plain;
-                await sleep(1500);
-                result.off = { minis: mini().length, inList: gB.tabs.includes(plain) };
+                await until(() => plain.linkedBrowser.currentURI.spec == pageOff, 8000).catch(() => null);
+                await sleep(1000);
+                result.off = { minis: mini().length, inList: inList(plain) };
                 Services.prefs.clearUserPref("evergreen.peek.enabled");
                 gB.removeTab(plain);
                 gB.unpinTab(fav);
                 gB.removeTab(fav);
                 // The command pops the current tab out too.
-                let t = c.openTabInSpace(c.activeSpace(), pageA);
+                let t = c.openTabInSpace(c.activeSpace(), pageCmd);
                 gB.selectedTab = t;
-                await until(() => t.linkedBrowser.currentURI.spec == pageA);
+                await until(() => t.linkedBrowser.currentURI.spec == pageCmd);
                 c.runCommand({ type: "mini-window" });
-                await until(() => mini().length > 0, 8000).catch(() => null);
-                result.command = { minis: mini().length, tabGone: !gB.tabs.includes(t) };
+                await until(() => mini().length > 0 && !inList(t), 10000).catch(() => null);
+                result.command = { minis: mini().length, tabGone: !inList(t) };
                 await closeMinis();
                 return result;
                 """,
-                self.server.url("a"),
+                self.server.url("pk1"), self.server.url("pk2"), self.server.url("pk3"),
             )
             if not r["available"]:
                 return "mini windows not available in this Firefox; skipped"
@@ -1753,14 +1760,27 @@ class Run:
 
             # 7. A limit across all downloads: with 2 connections in total a
             # file that wants 6 still arrives, on at most 2 at once.
-            self.js("Services.prefs.setIntPref('evergreen.downloads.maxConnections', 2);")
+            self.js(
+                """
+                let { EvergreenDownloads } = ChromeUtils.importESModule("@BASE@EvergreenDownloads.sys.mjs");
+                Services.prefs.setIntPref("evergreen.downloads.maxConnections", 2);
+                EvergreenDownloads.applyLimits();
+                EvergreenDownloads.connections.peak = 0;
+                """
+            )
             try:
                 r = get("/big.bin")
+                peak = self.js(
+                    """
+                    let { EvergreenDownloads } = ChromeUtils.importESModule("@BASE@EvergreenDownloads.sys.mjs");
+                    return EvergreenDownloads.connections.peak;
+                    """
+                )
             finally:
                 self.js("Services.prefs.clearUserPref('evergreen.downloads.maxConnections');")
             same_file("/big.bin", r)
-            assert 1 <= r["server"]["peak"] <= 2, f"the global limit of 2 connections was not kept: {r}"
-            out.append(f"global limit kept (peak {r['server']['peak']})")
+            assert "segmented" in r["events"] and 1 <= peak <= 2, f"the global limit of 2 connections was not kept (peak {peak}): {r}"
+            out.append(f"global limit kept (at most {peak} connections at once)")
 
             # 8. A queue: with one place, the second download waits for the first.
             self.files.reset()

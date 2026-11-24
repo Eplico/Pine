@@ -237,3 +237,12 @@ test("Limiter: 0 is unlimited, and raising the limit wakes the queue", async () 
   await queued.promise;
   assert.equal(limiter.active, 2);
 });
+
+test("Limiter: remembers the most places held at once", async () => {
+  let limiter = new D.Limiter(3);
+  let held = await Promise.all([limiter.acquire().promise, limiter.acquire().promise]);
+  assert.equal(limiter.peak, 2);
+  held.forEach(release => release());
+  await limiter.acquire().promise;
+  assert.equal(limiter.peak, 2);
+});

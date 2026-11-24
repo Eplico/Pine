@@ -91,6 +91,42 @@ def summarize(rows: list[Row]) -> dict[str, list[Row]]:
     return out
 
 
+PREF_CALL = re.compile(r'^\s*(?:sticky_)?pref\(\s*"([^"]+)"\s*,\s*(.+?)\s*\)\s*;')
+
+
+def firefox_defaults(sources: dict[str, str]) -> dict[str, object]:
+    """Best-effort default values from Firefox's pref files (name -> value).
+
+    Reads `pref("name", value);` lines (firefox.js, all.js) and the `name:` /
+    `value:` pairs of StaticPrefList.yaml. A value that depends on the build
+    (`@IS_NIGHTLY_BUILD@`, an expression) is left out, so "unknown" is
+    distinguishable from "known".
+    """
+    defaults: dict[str, object] = {}
+    for path, text in sources.items():
+        if path.endswith(".yaml"):
+            name = None
+            for line in text.splitlines():
+                m = re.match(r"^-\s+name:\s*(\S+)", line)
+                if m:
+                    name = m.group(1)
+                    continue
+                m = re.match(r"^\s+value:\s*(.+?)\s*$", line)
+                if m and name and not m.group(1).startswith(("@", "`")):
+                    raw = m.group(1)
+                    if raw in ("true", "false") or re.fullmatch(r"-?\d+", raw) or raw[:1] in "\"'":
+                        defaults.setdefault(name, _value(raw.strip("'")))
+                    name = None
+        else:
+            for line in text.splitlines():
+                m = PREF_CALL.match(line)
+                if m and not m.group(2).startswith(("@", "`")):
+                    value = _value(m.group(2))
+                    if isinstance(value, (bool, int, str)) and not (isinstance(value, str) and "(" in value):
+                        defaults[m.group(1)] = value  # firefox.js and all.js win over the yaml
+    return defaults
+
+
 def fetch(url: str = ARKENFOX_URL) -> str:
     try:
         with urllib.request.urlopen(url, timeout=60) as r:  # noqa: S310 (a fixed https URL)
@@ -99,9 +135,32 @@ def fetch(url: str = ARKENFOX_URL) -> str:
         raise EgError(f"could not fetch {url}: {e}") from e
 
 
-def report(text: str, show_missing: bool = True) -> str:
+def report(text: str, show_missing: bool = True, defaults: dict[str, object] | None = None) -> str:
     prefs = {p.name: p.value for p in load_prefs(PREFS_FILE)}
-    summary = summarize(compare(parse_arkenfox(text), prefs))
+    rows = [r for r in compare(parse_arkenfox(text), prefs) if r.name != "_user.js.parrot"]
+    summary = summarize(rows)
+    if defaults is not None:
+        # What matters among the prefs Evergreen leaves alone: where arkenfox
+        # wants something other than what Firefox does out of the box.
+        gaps = [r for r in summary["missing"] if r.name in defaults and defaults[r.name] != r.arkenfox]
+        unknown = [r for r in summary["missing"] if r.name not in defaults]
+        summary["missing"] = [r for r in summary["missing"] if r not in gaps and r not in unknown]
+        lines = [
+            f"arkenfox sets {len(rows)} prefs. Evergreen sets the same value for {len(summary['same'])} and "
+            f"another for {len(summary['different'])}. Of the {len(gaps) + len(unknown) + len(summary['missing'])} "
+            f"it does not set, Firefox's own default already matches arkenfox for {len(summary['missing'])}.",
+            "",
+            "Evergreen sets a different value (arkenfox -> Evergreen):",
+        ]
+        for r in summary["different"]:
+            lines.append(f"  {r.name}: {r.arkenfox!r} -> {r.evergreen!r}   [{r.section}]")
+        lines += ["", "Not set by Evergreen, and Firefox's default differs from arkenfox (arkenfox / Firefox):"]
+        for r in sorted(gaps, key=lambda r: (r.section, r.name)):
+            lines.append(f"  {r.name}: {r.arkenfox!r} / {defaults[r.name]!r}   [{r.section}]")
+        lines += ["", "Not set by Evergreen, Firefox's default could not be read (arkenfox value):"]
+        for r in sorted(unknown, key=lambda r: (r.section, r.name)):
+            lines.append(f"  {r.name} = {r.arkenfox!r}   [{r.section}]")
+        return "\n".join(lines)
     lines = [
         f"arkenfox sets {sum(len(v) for v in summary.values())} prefs; "
         f"Evergreen agrees on {len(summary['same'])}, "

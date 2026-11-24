@@ -116,7 +116,11 @@ def cmd_audit_prefs(args) -> None:
     from . import audit
 
     text = Path(args.file).read_text(encoding="utf-8") if args.file else audit.fetch()
-    print(audit.report(text, show_missing=not args.differences_only))
+    defaults = None
+    if not args.no_defaults:
+        up = load_upstream()
+        defaults = audit.firefox_defaults(checks.read_pref_sources_from_mirror(up, up.mirror_tag))
+    print(audit.report(text, show_missing=not args.differences_only, defaults=defaults))
 
 
 def cmd_fetch_extensions(args) -> None:
@@ -181,6 +185,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("audit-prefs", help="compare Evergreen's prefs with arkenfox's user.js (needs the network)")
     s.add_argument("--file", help="a local copy of user.js instead of fetching it")
     s.add_argument("--differences-only", action="store_true", help="skip the list of prefs Evergreen does not set")
+    s.add_argument("--no-defaults", action="store_true", help="do not read Firefox's own defaults from the mirror")
     s.set_defaults(func=cmd_audit_prefs)
 
     s = sub.add_parser("fetch-extensions", help="download bundled extensions")

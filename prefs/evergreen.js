@@ -111,6 +111,42 @@ pref("termsofuse.bypassNotification", true);
 pref("browser.preonboarding.enabled", false); // eg:dynamic Nimbus fallbackPref of the preonboarding feature
 pref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);
 
+// --- Added by the prefs audit against arkenfox (docs/prefs-audit.md) -----------
+// Network: nothing guessed, nothing leaked around the proxy or HTTPS-Only.
+pref("browser.places.speculativeConnect.enabled", false);
+pref("network.proxy.socks_remote_dns", true);
+pref("dom.security.https_only_mode_send_http_background_request", false);
+pref("network.auth.subresource-http-auth-allow", 1);
+pref("media.peerconnection.ice.proxy_only_if_behind_proxy", true);
+// Show internationalised domain names as punycode (look-alike domains).
+pref("network.IDN_show_punycode", true);
+pref("security.ssl.treat_unsafe_negotiation_as_broken", true);
+pref("browser.xul.error_pages.expert_bad_cert", true);
+// Pages cannot move or resize the window; Mozilla's UI tour pages cannot drive the UI.
+pref("dom.disable_window_move_resize", true);
+pref("browser.uitour.enabled", false);
+pref("security.csp.reporting.enabled", false);
+pref("signon.formlessCapture.enabled", false);
+pref("browser.helperApps.deleteTempFileOnExit", true);
+// No search suggestions, even if the engine offers them.
+pref("browser.urlbar.suggest.searches", false);
+pref("browser.urlbar.amp.featureGate", false);
+pref("browser.urlbar.importantDates.featureGate", false);
+pref("browser.urlbar.market.featureGate", false);
+pref("browser.urlbar.wikipedia.featureGate", false);
+pref("browser.urlbar.yelpRealtime.featureGate", false);
+// Telemetry: more layers (the code is not compiled in either).
+pref("toolkit.telemetry.server", "data:,");
+pref("toolkit.telemetry.bhrPing.enabled", false);
+pref("toolkit.telemetry.firstShutdownPing.enabled", false);
+pref("toolkit.telemetry.newProfilePing.enabled", false);
+pref("toolkit.telemetry.shutdownPingSender.enabled", false);
+pref("app.normandy.api_url", "");
+pref("breakpad.reportURL", "");
+// No add-on or feature recommendations.
+pref("browser.newtabpage.activity-stream.asrouter.userprefs.cfr.addons", false);
+pref("browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features", false);
+
 // --- Evergreen -------------------------------------------------------------------
 // Unpinned tabs not used for this many hours move to the Archive (0 = never).
 pref("evergreen.archive.afterHours", 12);

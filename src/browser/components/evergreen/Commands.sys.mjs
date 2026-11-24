@@ -231,7 +231,7 @@ export function matchCommands(text, context) {
     }
   }
   add("evergreen-command-new-space", {}, { label: "new space", keywords: "create add" }, { type: "new-space" });
-  if (context.canSplit && !tab.isStartPage) {
+  if (context.canSplit && (tab.split || !tab.isStartPage)) {
     if (tab.split) {
       add("evergreen-command-unsplit", {}, { label: "close split view", keywords: "unsplit separate" }, { type: "unsplit" });
     } else {
