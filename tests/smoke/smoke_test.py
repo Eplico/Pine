@@ -682,9 +682,11 @@ class Run:
                 gB.selectedTab = t;
                 await until(() => t.linkedBrowser.currentURI.spec == "about:robots");
                 let from = c.activeSpaceId;
-                await rowsFor("> move tab to work");
+                let moveRows = await rowsFor("> move tab to work");
                 enter();
-                await sleep(500);
+                let isMoved = () => gB.tabs.some(x => x.linkedBrowser.currentURI.spec == "about:robots"
+                  && x.getAttribute("evergreen-space") == work);
+                await until(isMoved, 5000).catch(() => null);
                 let moved = gB.tabs.filter(x => x.linkedBrowser.currentURI.spec == "about:robots")
                   .map(x => x.getAttribute("evergreen-space"));
                 let afterMove = c.activeSpaceId;
@@ -701,10 +703,11 @@ class Run:
                   enter();
                   await sleep(500);
                   split.on = !!gB.selectedTab.splitview;
-                  await rowsFor("> close split view");
+                  split.rows = await rowsFor("> close split view");
                   enter();
-                  await sleep(500);
+                  await until(() => !gB.selectedTab.splitview, 4000).catch(() => null);
                   split.off = !gB.selectedTab.splitview;
+                  split.tabs = tabList();
                   let sv = gB.selectedTab;
                   if (sv.label != "Page C") { gB.removeTab(sv); }
                 }
@@ -712,19 +715,129 @@ class Run:
                   gB.removeTab(x);
                 }
                 await c.applySpace(work);
-                return { list, mixed, switched, personal, from, moved, afterMove, work, others, picked, split };
+                return { list, mixed, switched, personal, from, moveRows, moved, afterMove, work, others, picked, split };
                 """
             )
             assert r["list"] and r["list"][0].startswith("command:") and "Switch to" in r["list"][0], r
             assert r["switched"] == r["personal"], f"the command should switch to Personal: {r}"
             assert r["mixed"][0].startswith("search:") and any(x.startswith("command:") for x in r["mixed"]), r
-            assert r["moved"] == [r["personal"]] or r["moved"] == [r["from"]] and r["from"] != r["work"], r
+            assert r["from"] == r["personal"] and r["moved"] == [r["work"]] and r["afterMove"] == r["work"], f"the tab should move to Work: {r}"
             assert any(x.startswith("command:") and "Switch to tab" in x for x in r["others"]), r
             sp = r["split"]
             if sp["available"]:
                 assert sp.get("on") and sp.get("off"), f"split view should open and close: {r}"
             self.shot("command-bar")
             return "> commands run, mixed with search, open tabs found" + (", split view" if sp["available"] else "")
+
+        def link_routing():
+            r = self.js(
+                """
+                let [pageA, pageB] = arguments;
+                let personal = SpacesStore.state.spaces[0];
+                let work = space("Work");
+                await c.applySpace(work.id);
+                // A rule: 127.0.0.1 (the test pages) opens in Personal.
+                c.setRouting("127.0.0.1", personal.id);
+                let routed = c.routedSpace(pageA)?.id;
+                // A new tab from the browser's own UI goes to that Space and takes over the window.
+                let opened = nextTabOpen();
+                w.openTrustedLinkIn(pageA, "tab");
+                let t = await opened;
+                await sleep(200);
+                let viaUi = { space: t.getAttribute("evergreen-space"), ctx: t.userContextId,
+                  active: c.activeSpaceId, selected: gB.selectedTab == t };
+                gB.removeTab(t);
+                // Navigation inside a tab is never routed.
+                await c.applySpace(work.id);
+                let inTab = c.openTabInSpace(work, "about:robots");
+                gB.selectedTab = inTab;
+                w.openTrustedLinkIn(pageB, "current");
+                await sleep(300);
+                let stayed = { space: inTab.getAttribute("evergreen-space"), active: c.activeSpaceId };
+                gB.removeTab(inTab);
+                // A link from another app (OPEN_EXTERNAL) follows the rule too.
+                await c.applySpace(work.id);
+                let before = gB.tabs.length;
+                let bc = w.browserDOMWindow.openURI(Services.io.newURI(pageB), null,
+                  Ci.nsIBrowserDOMWindow.OPEN_DEFAULTWINDOW, Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL,
+                  Services.scriptSecurityManager.getSystemPrincipal(), null);
+                await sleep(300);
+                let ext = gB.selectedTab;
+                let external = { returned: !!bc, added: gB.tabs.length - before,
+                  space: ext.getAttribute("evergreen-space"), active: c.activeSpaceId, url: ext.linkedBrowser.currentURI.spec };
+                gB.removeTab(ext);
+                // With the rule gone nothing is routed.
+                c.setRouting("127.0.0.1", null);
+                await c.applySpace(work.id);
+                let none = c.routedSpace(pageA);
+                return { routed, personal: personal.id, work: work.id, viaUi, stayed, external, none,
+                  rules: Services.prefs.getStringPref("evergreen.routing.rules") };
+                """,
+                self.server.url("a"), self.server.url("b"),
+            )
+            assert r["routed"] == r["personal"], r
+            vu = r["viaUi"]
+            assert vu["space"] == r["personal"] and vu["active"] == r["personal"] and vu["selected"], r
+            assert r["stayed"]["space"] == r["work"] and r["stayed"]["active"] == r["work"], f"navigation was routed: {r}"
+            ex = r["external"]
+            assert ex["returned"] and ex["space"] == r["personal"] and ex["active"] == r["personal"], r
+            assert r["none"] is None and r["rules"] == "[]", r
+            return "new tabs and links from other apps follow a rule; navigation in a tab never does"
+
+        def peek_and_mini_window():
+            r = self.js(
+                """
+                let [pageA] = arguments;
+                let mini = () => [...Services.wm.getEnumerator("navigator:browser")]
+                  .filter(x => x.document.documentElement.hasAttribute("mini-window"));
+                let result = { available: c.canPopOut() };
+                if (!result.available) { return result; }
+                let closeMinis = async () => {
+                  for (let m of mini()) { m.close(); }
+                  await sleep(300);
+                };
+                // A Favorite, and a link from it to another site.
+                let fav = c.openTabInSpace(c.activeSpace(), "about:robots");
+                gB.selectedTab = fav;
+                await until(() => fav.linkedBrowser.currentURI.spec == "about:robots");
+                gB.pinTab(fav);
+                let count = gB.tabs.length;
+                let link = gB.addTab(pageA, { openerBrowser: fav.linkedBrowser, triggeringPrincipal:
+                  Services.scriptSecurityManager.getSystemPrincipal() });
+                gB.selectedTab = link;
+                await until(() => mini().length > 0, 8000).catch(() => null);
+                result.peek = { minis: mini().length, tabGone: !link.isConnected || !gB.tabs.includes(link),
+                  tabs: gB.tabs.length - count };
+                await closeMinis();
+                // With Peek off the link is an ordinary tab.
+                Services.prefs.setBoolPref("evergreen.peek.enabled", false);
+                let plain = gB.addTab(pageA, { openerBrowser: fav.linkedBrowser, triggeringPrincipal:
+                  Services.scriptSecurityManager.getSystemPrincipal() });
+                gB.selectedTab = plain;
+                await sleep(1500);
+                result.off = { minis: mini().length, inList: gB.tabs.includes(plain) };
+                Services.prefs.clearUserPref("evergreen.peek.enabled");
+                gB.removeTab(plain);
+                gB.unpinTab(fav);
+                gB.removeTab(fav);
+                // The command pops the current tab out too.
+                let t = c.openTabInSpace(c.activeSpace(), pageA);
+                gB.selectedTab = t;
+                await until(() => t.linkedBrowser.currentURI.spec == pageA);
+                c.runCommand({ type: "mini-window" });
+                await until(() => mini().length > 0, 8000).catch(() => null);
+                result.command = { minis: mini().length, tabGone: !gB.tabs.includes(t) };
+                await closeMinis();
+                return result;
+                """,
+                self.server.url("a"),
+            )
+            if not r["available"]:
+                return "mini windows not available in this Firefox; skipped"
+            assert r["peek"]["minis"] == 1 and r["peek"]["tabGone"], f"a link from a Favorite should open in a mini window: {r}"
+            assert r["off"]["minis"] == 0 and r["off"]["inList"], f"with Peek off the link should be a tab: {r}"
+            assert r["command"]["minis"] == 1 and r["command"]["tabGone"], f"the command should pop the tab out: {r}"
+            return "a link from a Favorite to another site opens in a mini window; off switch; command"
 
         def new_tab_at_top():
             r = self.js(
@@ -1634,6 +1747,8 @@ class Run:
         self.check("Spaces with separate sign-ins (containers)", spaces_and_containers)
         self.check("new-tab command opens the search box", new_tab_command)
         self.check("command bar: Space switching, moving a tab, open tabs, split view", command_bar)
+        self.check("link routing: a site opens in its Space", link_routing)
+        self.check("Peek: links from a Favorite open in a mini window", peek_and_mini_window)
         self.check("new tabs open at the top", new_tab_at_top)
         self.check("start page: Evergreen and a search box", start_page)
         self.check("switching Spaces hides/shows tabs", switching)

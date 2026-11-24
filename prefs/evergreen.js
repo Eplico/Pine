@@ -137,3 +137,11 @@ pref("evergreen.downloads.minSizeMB", 8);     // smaller files are left to Firef
 pref("evergreen.downloads.maxSizeGB", 64);    // larger files are left to Firefox
 pref("evergreen.downloads.excludeHosts", ""); // comma-separated; subdomains included
 pref("evergreen.downloads.log", false);       // decisions and retries to the browser console
+
+// Link routing (design §7.8): a JSON list of { host, spaceId }; set from the
+// command bar ("Always open <site> in <Space>"), not by hand.
+pref("evergreen.routing.rules", "[]");
+// Peek (design §7.6): a link from a Favorite to another site opens in a mini window.
+pref("evergreen.peek.enabled", true);
+// Open links from other apps in a mini window (decision Q8: off by default).
+pref("evergreen.externalLinks.miniWindow", false);

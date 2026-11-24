@@ -23,6 +23,7 @@ MOZ_SRC_FILES += [
     "EvergreenUpdate.sys.mjs",
     "EvergreenWindow.sys.mjs",
     "FirefoxModules.sys.mjs",
+    "LinkRouting.sys.mjs",
     "ProfileAdoption.sys.mjs",
     "SearchDefaults.sys.mjs",
     "Spaces.sys.mjs",

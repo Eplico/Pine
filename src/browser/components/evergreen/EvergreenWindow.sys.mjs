@@ -28,6 +28,8 @@ import { SpacesStore } from "./SpacesStore.sys.mjs";
 import { WindowLayout, applyToolbarLayout, centerPopup } from "./EvergreenLayout.sys.mjs";
 import { SearchBar, isStartPage } from "./EvergreenSearch.sys.mjs";
 import { matchCommands } from "./Commands.sys.mjs";
+import * as LinkRouting from "./LinkRouting.sys.mjs";
+import { importBrowserModule } from "./FirefoxModules.sys.mjs";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const STYLESHEET = new URL("evergreen.css", import.meta.url).href;
@@ -43,6 +45,9 @@ const HIDDEN_BY = "evergreen";
 // Applied once per profile; bump to apply a changed toolbar layout again.
 const TOOLBAR_LAYOUT_PREF = "evergreen.defaults.toolbarLayout";
 const TOOLBAR_LAYOUT_VERSION = 1;
+const ROUTING_PREF = "evergreen.routing.rules";
+const PEEK_PREF = "evergreen.peek.enabled";
+const EXTERNAL_MINI_PREF = "evergreen.externalLinks.miniWindow";
 
 // Space colour -> Firefox container colour.
 const CONTAINER_COLORS = {
@@ -204,6 +209,7 @@ class WindowController {
     this.buildPopups();
     this.buildKeys();
     this.wrapNewTabLoading();
+    this.wrapExternalLinks();
     this.layout = new WindowLayout(win);
     this.layout.start();
     this._cleanups.push(() => this.layout.stop());
@@ -220,10 +226,13 @@ class WindowController {
     this.listen(tabs, "TabClose", e => this.onTabClose(e.target));
     this.listen(tabs, "SSTabRestored", e => this.updateBlank(e.target));
     let progress = {
-      onLocationChange: (browser, webProgress) => {
+      onLocationChange: (browser, webProgress, request, location) => {
         let tab = webProgress.isTopLevel && this.gBrowser.getTabForBrowser(browser);
         if (tab) {
           this.updateBlank(tab);
+          if (tab._evergreenPeekFrom && location) {
+            this.maybePeek(tab, location.spec);
+          }
         }
       },
     };
@@ -351,6 +360,9 @@ class WindowController {
     // Restored tabs are corrected in onTabRestoring once their saved values
     // are available; everything else joins its opener's Space or the active one.
     let opener = tab.openerTab;
+    if (opener?.pinned && this.canPopOut()) {
+      tab._evergreenPeekFrom = opener;
+    }
     let id = (opener && !opener.pinned && this.spaceOf(opener)) || this.activeSpace().id;
     this.setTabSpace(tab, id);
     this.render();
@@ -551,7 +563,18 @@ class WindowController {
       if (!newTab) {
         return original.call(this, url, where, params);
       }
-      if (params.userContextId === undefined) {
+      // Link routing: a site with a rule opens in its Space (new tabs from
+      // the browser's own UI only; never navigation inside a tab).
+      let routed = null;
+      if (params.userContextId === undefined && typeof url == "string") {
+        routed = controller.routedSpace(url);
+        if (routed && routed.id == controller.activeSpaceId) {
+          routed = null;
+        }
+      }
+      if (routed) {
+        params = { ...params, userContextId: routed.userContextId };
+      } else if (params.userContextId === undefined) {
         let userContextId = controller.activeSpace().userContextId;
         if (userContextId) {
           params = { ...params, userContextId };
@@ -570,11 +593,158 @@ class WindowController {
         if (opened && !opened.pinned && !params.relatedToCurrent) {
           controller.gBrowser.moveTabToStart(opened);
         }
+        if (opened && routed) {
+          controller.placeRouted(opened, routed, !params.inBackground && where == "tab");
+        }
       }
     };
     this._cleanups.push(() => {
       win.openTrustedLinkIn = original;
     });
+  }
+
+  // --- Link routing, external links, Peek, mini windows -----------------------------
+
+  /** The Space an address is routed to (LinkRouting), or null. */
+  routedSpace(url) {
+    let rules = LinkRouting.parseRules(Services.prefs.getStringPref(ROUTING_PREF, "[]"));
+    if (!rules.length) {
+      return null;
+    }
+    let id = LinkRouting.routeFor(url, rules, this.state.spaces.map(s => s.id));
+    return id ? Spaces.getSpace(this.state, id) : null;
+  }
+
+  /** Put a tab that was opened for a routed address into its Space. */
+  placeRouted(tab, space, foreground) {
+    this.setTabSpace(tab, space.id);
+    if (foreground) {
+      this.applySpace(space.id, { selectTab: false });
+      this.gBrowser.selectedTab = tab;
+    } else {
+      this.updateTabVisibility(tab);
+    }
+    this.render();
+  }
+
+  setRouting(host, spaceId) {
+    let rules = LinkRouting.parseRules(Services.prefs.getStringPref(ROUTING_PREF, "[]"));
+    rules = spaceId ? LinkRouting.addRule(rules, host, spaceId) : LinkRouting.removeRule(rules, host);
+    Services.prefs.setStringPref(ROUTING_PREF, LinkRouting.serializeRules(rules));
+  }
+
+  /**
+   * Links from other apps (nsIBrowserDOMWindow.openURI with OPEN_EXTERNAL):
+   * routed to their Space, or into a mini window (evergreen.externalLinks.miniWindow).
+   * Prototype: a wrapper on the window's browserDOMWindow; a real build turns
+   * it into a small hook patch (handoff.md, "Fragile points").
+   */
+  wrapExternalLinks() {
+    let dom = this.win.browserDOMWindow;
+    if (!dom || typeof dom.openURI != "function") {
+      return;
+    }
+    let original = dom.openURI;
+    let controller = this;
+    dom.openURI = function (uri, openWindowInfo, where, flags, ...rest) {
+      let external = !!(flags & Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL);
+      if (!external || openWindowInfo || !uri) {
+        return original.call(this, uri, openWindowInfo, where, flags, ...rest);
+      }
+      let browser = null;
+      try {
+        browser = controller.openExternal(uri, rest[0], rest[1]);
+      } catch (e) {
+        console.error("Evergreen external link", e);
+      }
+      if (browser) {
+        return browser.browsingContext;
+      }
+      let result = original.call(this, uri, openWindowInfo, where, flags, ...rest);
+      if (Services.prefs.getBoolPref(EXTERNAL_MINI_PREF, false)) {
+        try {
+          let tab = controller.gBrowser.getTabForBrowser(result?.embedderElement);
+          if (tab) {
+            controller.popOut(tab);
+          }
+        } catch (e) {
+          console.error("Evergreen external link, mini window", e);
+        }
+      }
+      return result;
+    };
+    this._cleanups.push(() => {
+      delete dom.openURI;
+    });
+  }
+
+  /** The browser a routed external link opened in, or null when no rule applies. */
+  openExternal(uri, triggeringPrincipal, policyContainer) {
+    let space = uri.schemeIs("http") || uri.schemeIs("https") ? this.routedSpace(uri.spec) : null;
+    if (!space) {
+      return null;
+    }
+    let tab = this.gBrowser.addTab(uri.spec, {
+      userContextId: space.userContextId,
+      fromExternal: true,
+      triggeringPrincipal,
+      policyContainer,
+    });
+    this.gBrowser.moveTabToStart(tab);
+    this.placeRouted(tab, space, true);
+    this.win.focus();
+    return tab.linkedBrowser;
+  }
+
+  get miniWindows() {
+    try {
+      return importBrowserModule("browser/components/miniwindow", "MiniWindowManager").MiniWindowManager;
+    } catch {
+      return null;
+    }
+  }
+
+  canPopOut() {
+    return (
+      Services.prefs.getBoolPref("browser.mini-window.enabled", false) &&
+      typeof this.miniWindows?.popTab == "function"
+    );
+  }
+
+  /** Move a tab into Firefox's own always-on-top mini window. */
+  popOut(tab) {
+    if (!this.canPopOut() || tab.pinned) {
+      return null;
+    }
+    return this.miniWindows.popTab(tab, "toolbar_button");
+  }
+
+  /**
+   * Peek (design §7.6): a link from a Favorite that leaves its site opens in a
+   * mini window instead of replacing the Favorite's page or adding a tab to
+   * the list. It is a normal tab in the same Space and container, and the mini
+   * window's own button puts it back. Called when a tab opened from a Favorite
+   * first reports an address.
+   */
+  maybePeek(tab, location) {
+    let opener = tab._evergreenPeekFrom;
+    if (!opener) {
+      return;
+    }
+    let site = LinkRouting.siteOf(location);
+    if (!site) {
+      return; // still loading about:blank, or not a web page
+    }
+    delete tab._evergreenPeekFrom;
+    let from = opener.isConnected ? LinkRouting.siteOf(opener.linkedBrowser.currentURI.spec) : null;
+    if (!tab.selected || !opener.pinned || site == from || !Services.prefs.getBoolPref(PEEK_PREF, true)) {
+      return;
+    }
+    try {
+      this.popOut(tab);
+    } catch (e) {
+      console.error("Evergreen Peek", e);
+    }
   }
 
   onSpacesChanged() {
@@ -726,6 +896,9 @@ class WindowController {
       tabs,
       archive: ArchiveStore.entries.slice(0, 200).map(e => ({ id: e.id, title: e.title, url: e.url })),
       canSplit,
+      canMini: this.canPopOut(),
+      site: LinkRouting.siteOf(tab.linkedBrowser.currentURI.spec),
+      routedTo: this.routedSpace(tab.linkedBrowser.currentURI.spec)?.id ?? null,
     });
   }
 
@@ -769,6 +942,17 @@ class WindowController {
         }
         break;
       }
+      case "route-site":
+        if (Spaces.getSpace(this.state, action.spaceId)) {
+          this.setRouting(action.host, action.spaceId);
+        }
+        break;
+      case "unroute-site":
+        this.setRouting(action.host, null);
+        break;
+      case "mini-window":
+        this.popOut(gBrowser.selectedTab);
+        break;
       case "split":
         win.BrowserCommands?.addTabSplitView?.();
         break;

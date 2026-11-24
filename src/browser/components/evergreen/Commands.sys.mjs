@@ -19,6 +19,8 @@
  *   { type: "split" }, { type: "unsplit" }
  *   { type: "new-space" }
  *   { type: "toggle-keep" }
+ *   { type: "route-site", host, spaceId }, { type: "unroute-site", host }
+ *   { type: "mini-window" }
  *
  * Text starting with ">" asks for commands only ("> " alone lists them all);
  * otherwise commands are suggested only when two or more characters match.
@@ -85,6 +87,9 @@ export function parseQuery(text) {
  *   tabs: [{ id, title, url, spaceId, selected }]   (open tabs, not hidden by a Space)
  *   archive: [{ id, title, url }]
  *   canSplit: boolean   (the window offers split view)
+ *   canMini: boolean    (the window offers mini windows)
+ *   site: string|null   (the selected tab's site, e.g. "github.com")
+ *   routedTo: spaceId|null   (where link routing sends that site)
  */
 export function matchCommands(text, context) {
   let { commandsOnly, query } = parseQuery(text);
@@ -127,6 +132,34 @@ export function matchCommands(text, context) {
       {},
       { label: tab.kept ? "stop keeping tab" : "keep tab in space", keywords: "pin archive" },
       { type: "toggle-keep" }
+    );
+  }
+  if (context.site && !tab.isStartPage) {
+    for (let space of spaces) {
+      if (space.id != context.routedTo) {
+        add(
+          "evergreen-command-route-site",
+          { site: context.site, name: space.name },
+          { label: `always open ${context.site} in ${space.name}`, keywords: "link routing route rule" },
+          { type: "route-site", host: context.site, spaceId: space.id }
+        );
+      }
+    }
+    if (context.routedTo) {
+      add(
+        "evergreen-command-unroute-site",
+        { site: context.site },
+        { label: `stop routing ${context.site}`, keywords: "link routing route rule remove" },
+        { type: "unroute-site", host: context.site }
+      );
+    }
+  }
+  if (context.canMini && !tab.isStartPage && !tab.pinned) {
+    add(
+      "evergreen-command-mini-window",
+      {},
+      { label: "pop out to a mini window", keywords: "peek float window small" },
+      { type: "mini-window" }
     );
   }
   add("evergreen-command-new-space", {}, { label: "new space", keywords: "create add" }, { type: "new-space" });

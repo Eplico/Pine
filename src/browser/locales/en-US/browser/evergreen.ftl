@@ -200,6 +200,14 @@ evergreen-command-switch-space = Switch to { $name }
 evergreen-command-move-tab = Move tab to { $name }
 evergreen-command-keep = Keep tab in Space
 evergreen-command-unkeep = Stop keeping tab
+# Variables:
+#   $site (String) - A site, e.g. github.com.
+#   $name (String) - The Space's name.
+evergreen-command-route-site = Always open { $site } in { $name }
+# Variables:
+#   $site (String) - A site, e.g. github.com.
+evergreen-command-unroute-site = Stop sending { $site } to a Space
+evergreen-command-mini-window = Pop out to a mini window
 evergreen-command-new-space = New Space…
 evergreen-command-split = Split view
 evergreen-command-unsplit = Close split view

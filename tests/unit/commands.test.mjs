@@ -115,3 +115,21 @@ test("actions are plain data", () => {
     assert.equal(JSON.stringify(row.action), JSON.stringify(structuredClone(row.action)));
   }
 });
+
+test("link routing: offered for the current site, with a way to stop", () => {
+  let rows = matchCommands("always open", context({ site: "github.com", routedTo: null }));
+  assert.deepEqual(rows[0].action, { type: "route-site", host: "github.com", spaceId: "a" });
+  let routed = context({ site: "github.com", routedTo: "b" });
+  assert.equal(matchCommands("> stop routing", routed)[0].action.type, "unroute-site");
+  assert.equal(matchCommands("> always open github.com in work", routed).length, 0);
+  assert.equal(matchCommands("> routing", context()).length, 0); // no site: nothing to route
+});
+
+test("mini window: not for Favorites or the start page, or where unavailable", () => {
+  assert.deepEqual(matchCommands("mini window", context({ canMini: true }))[0].action, { type: "mini-window" });
+  assert.equal(matchCommands("mini window", context()).length, 0);
+  assert.equal(
+    matchCommands("mini window", context({ canMini: true, tab: { pinned: true, isStartPage: false } })).length,
+    0
+  );
+});
