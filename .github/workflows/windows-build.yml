@@ -233,7 +233,8 @@ jobs:
   publish:
     name: Publish the release
     needs: test-and-publish
-    if: ${{ success() && (github.event_name == 'push' || inputs.publish) }}
+    # always(): with from_run the build job is skipped, which would skip this too.
+    if: ${{ always() && needs.test-and-publish.result == 'success' && (github.event_name == 'push' || inputs.publish) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
