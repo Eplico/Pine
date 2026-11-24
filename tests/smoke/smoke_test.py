@@ -652,6 +652,80 @@ class Run:
             plus = f"and the + button, #{r['fromButton']['plus']}" if r["fromButton"]["plus"] else "+ button not shown"
             return f"Ctrl+T ({plus}) shows the search box and suggests visited pages; Enter opens a tab at the top, in the Space's container"
 
+        def command_bar():
+            r = self.js(
+                """
+                let d = w.document;
+                let input = d.getElementById("evergreen-search-input");
+                let rowsFor = async text => {
+                  w.BrowserCommands.openTab();
+                  await sleep(100);
+                  input.value = text;
+                  input.dispatchEvent(new w.Event("input", { bubbles: true }));
+                  await until(() => d.querySelector('.evergreen-search-result[data-kind="command"]'), 3000).catch(() => null);
+                  return [...d.querySelectorAll(".evergreen-search-result")].map(r => r.dataset.kind + ": " + r.textContent);
+                };
+                let enter = () => input.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+                let personal = SpacesStore.state.spaces[0].id;
+                let work = space("Work").id;
+                await c.applySpace(work);
+                // A command typed after ">" runs on Enter.
+                let list = await rowsFor("> switch to personal");
+                enter();
+                await sleep(200);
+                let switched = c.activeSpaceId;
+                // Without ">" the commands come after what is typed.
+                let mixed = await rowsFor("switch work");
+                input.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+                // Move the current tab to another Space.
+                let t = c.openTabInSpace(c.activeSpace(), "about:robots");
+                gB.selectedTab = t;
+                await until(() => t.linkedBrowser.currentURI.spec == "about:robots");
+                let from = c.activeSpaceId;
+                await rowsFor("> move tab to work");
+                enter();
+                await sleep(500);
+                let moved = gB.tabs.filter(x => x.linkedBrowser.currentURI.spec == "about:robots")
+                  .map(x => x.getAttribute("evergreen-space"));
+                let afterMove = c.activeSpaceId;
+                // An open tab in another Space is found by its title and selected.
+                let others = await rowsFor("> page");
+                enter();
+                await sleep(300);
+                let picked = gB.selectedTab.label;
+                // Split view, where the window has it.
+                let split = { available: typeof w.BrowserCommands.addTabSplitView == "function"
+                  && Services.prefs.getBoolPref("browser.tabs.splitView.enabled", false) };
+                if (split.available) {
+                  await rowsFor("> split view");
+                  enter();
+                  await sleep(500);
+                  split.on = !!gB.selectedTab.splitview;
+                  await rowsFor("> close split view");
+                  enter();
+                  await sleep(500);
+                  split.off = !gB.selectedTab.splitview;
+                  let sv = gB.selectedTab;
+                  if (sv.label != "Page C") { gB.removeTab(sv); }
+                }
+                for (let x of gB.tabs.filter(x => x.linkedBrowser.currentURI.spec == "about:robots")) {
+                  gB.removeTab(x);
+                }
+                await c.applySpace(work);
+                return { list, mixed, switched, personal, from, moved, afterMove, work, others, picked, split };
+                """
+            )
+            assert r["list"] and r["list"][0].startswith("command:") and "Switch to" in r["list"][0], r
+            assert r["switched"] == r["personal"], f"the command should switch to Personal: {r}"
+            assert r["mixed"][0].startswith("search:") and any(x.startswith("command:") for x in r["mixed"]), r
+            assert r["moved"] == [r["personal"]] or r["moved"] == [r["from"]] and r["from"] != r["work"], r
+            assert any(x.startswith("command:") and "Switch to tab" in x for x in r["others"]), r
+            sp = r["split"]
+            if sp["available"]:
+                assert sp.get("on") and sp.get("off"), f"split view should open and close: {r}"
+            self.shot("command-bar")
+            return "> commands run, mixed with search, open tabs found" + (", split view" if sp["available"] else "")
+
         def new_tab_at_top():
             r = self.js(
                 """
@@ -1559,6 +1633,7 @@ class Run:
         self.check("first run: offer to import from another browser", import_offer)
         self.check("Spaces with separate sign-ins (containers)", spaces_and_containers)
         self.check("new-tab command opens the search box", new_tab_command)
+        self.check("command bar: Space switching, moving a tab, open tabs, split view", command_bar)
         self.check("new tabs open at the top", new_tab_at_top)
         self.check("start page: Evergreen and a search box", start_page)
         self.check("switching Spaces hides/shows tabs", switching)

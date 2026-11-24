@@ -27,6 +27,7 @@ import { ArchiveStore, archiveSettings } from "./ArchiveStore.sys.mjs";
 import { SpacesStore } from "./SpacesStore.sys.mjs";
 import { WindowLayout, applyToolbarLayout, centerPopup } from "./EvergreenLayout.sys.mjs";
 import { SearchBar, isStartPage } from "./EvergreenSearch.sys.mjs";
+import { matchCommands } from "./Commands.sys.mjs";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const STYLESHEET = new URL("evergreen.css", import.meta.url).href;
@@ -206,7 +207,10 @@ class WindowController {
     this.layout = new WindowLayout(win);
     this.layout.start();
     this._cleanups.push(() => this.layout.stop());
-    this.searchBar = new SearchBar(win);
+    this.searchBar = new SearchBar(win, {
+      gather: text => this.gatherCommands(text),
+      run: action => this.runCommand(action),
+    });
     this.searchBar.start();
     this._cleanups.push(() => this.searchBar.stop());
 
@@ -682,6 +686,95 @@ class WindowController {
       this.applySpace(target.id, { selectTab: false });
     } else {
       this.updateTabVisibility(newTab);
+    }
+  }
+
+  // --- Command bar -------------------------------------------------------------------
+
+  /** Matching commands for the search box (Commands.sys.mjs). */
+  async gatherCommands(text) {
+    await ArchiveStore.ready();
+    let { gBrowser, win } = this;
+    let tab = gBrowser.selectedTab;
+    this._commandTabs = new Map();
+    let tabs = [];
+    gBrowser.tabs.forEach((t, index) => {
+      if (t.closing || t.hasAttribute(TAB_BLANK) || !isRecordable(t.linkedBrowser?.currentURI?.spec)) {
+        return;
+      }
+      let id = String(index);
+      this._commandTabs.set(id, t);
+      tabs.push({
+        id,
+        title: t.label,
+        url: t.linkedBrowser.currentURI.spec,
+        selected: t == tab,
+      });
+    });
+    let canSplit =
+      typeof win.BrowserCommands?.addTabSplitView == "function" &&
+      Services.prefs.getBoolPref("browser.tabs.splitView.enabled", false);
+    return matchCommands(text, {
+      spaces: this.state.spaces.map(s => ({ id: s.id, name: this.displayName(s) })),
+      activeSpaceId: this.activeSpaceId,
+      tab: {
+        pinned: tab.pinned,
+        isStartPage: tab.hasAttribute(TAB_BLANK),
+        kept: this.isKept(tab),
+        split: !!tab.splitview,
+      },
+      tabs,
+      archive: ArchiveStore.entries.slice(0, 200).map(e => ({ id: e.id, title: e.title, url: e.url })),
+      canSplit,
+    });
+  }
+
+  /** Carry out a command's action (plain data from Commands.sys.mjs). */
+  runCommand(action) {
+    let { gBrowser, win } = this;
+    switch (action?.type) {
+      case "switch-space":
+        if (Spaces.getSpace(this.state, action.spaceId)) {
+          this.applySpace(action.spaceId);
+        }
+        break;
+      case "move-tab":
+        this.moveTabToSpace(gBrowser.selectedTab, action.spaceId);
+        break;
+      case "toggle-keep": {
+        let tab = gBrowser.selectedTab;
+        this.setKept(tab, !this.isKept(tab));
+        this.render();
+        break;
+      }
+      case "new-space":
+        this.openEditor(this.doc.getElementById("evergreen-new-space-button"), { mode: "new" });
+        break;
+      case "select-tab": {
+        let tab = this._commandTabs?.get(action.tabId);
+        if (!tab?.isConnected || tab.closing) {
+          break;
+        }
+        let spaceId = tab.pinned ? null : this.spaceOf(tab);
+        if (spaceId && spaceId != this.activeSpaceId) {
+          this.applySpace(spaceId, { selectTab: false });
+        }
+        gBrowser.selectedTab = tab;
+        break;
+      }
+      case "reopen": {
+        let entry = ArchiveStore.entries.find(e => e.id == action.entryId);
+        if (entry) {
+          this.reopenArchived(entry);
+        }
+        break;
+      }
+      case "split":
+        win.BrowserCommands?.addTabSplitView?.();
+        break;
+      case "unsplit":
+        win.BrowserCommands?.separateTabSplitView?.();
+        break;
     }
   }
 

@@ -12,6 +12,7 @@ with Files("**"):
 MOZ_SRC_FILES += [
     "Archive.sys.mjs",
     "ArchiveStore.sys.mjs",
+    "Commands.sys.mjs",
     "DownloadPlan.sys.mjs",
     "evergreen.css",
     "EvergreenDownloads.sys.mjs",

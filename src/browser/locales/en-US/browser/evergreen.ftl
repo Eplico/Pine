@@ -140,6 +140,8 @@ evergreen-search-row-search = Search with { $engine }
 evergreen-search-row-search-no-engine = Search
 # Beside a typed address.
 evergreen-search-row-visit = Open address
+# Beside a command (switch Space, move the tab, ...).
+evergreen-search-row-command = Command
 
 ## Updates and carrying data over to a new installation
 
@@ -187,3 +189,23 @@ evergreen-profile-use =
 evergreen-profile-keep =
     .label = Start fresh
     .accesskey = S
+
+## Command bar (the search box that Ctrl+T opens)
+
+# Variables:
+#   $name (String) - The Space's name.
+evergreen-command-switch-space = Switch to { $name }
+# Variables:
+#   $name (String) - The Space's name.
+evergreen-command-move-tab = Move tab to { $name }
+evergreen-command-keep = Keep tab in Space
+evergreen-command-unkeep = Stop keeping tab
+evergreen-command-new-space = New Space…
+evergreen-command-split = Split view
+evergreen-command-unsplit = Close split view
+# Variables:
+#   $title (String) - The title of an open tab.
+evergreen-command-select-tab = Switch to tab: { $title }
+# Variables:
+#   $title (String) - The title of an archived tab.
+evergreen-command-reopen = Reopen from Archive: { $title }

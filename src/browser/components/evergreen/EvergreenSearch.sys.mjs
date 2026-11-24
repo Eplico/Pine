@@ -18,11 +18,17 @@
  * search engine (Firefox's own address parsing decides, as in the address
  * bar). Below the box, pages from history and bookmarks that match.
  *
+ * The box is also a command bar (Commands.sys.mjs): matching commands (switch
+ * Space, move the tab, open tabs, the Archive, split view) are listed among
+ * the results, and text starting with ">" lists commands only. `host` carries
+ * them out: { gather(text) -> rows, run(action) } (EvergreenWindow).
+ *
  * Security (design doc §6.2): page titles and URLs from history are only ever
  * written as text, and only http(s), file and about: addresses are opened.
  */
 
 import { getSearchService } from "./SearchDefaults.sys.mjs";
+import { parseQuery } from "./Commands.sys.mjs";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const START_PAGES = new Set(["about:home", "about:newtab"]);
@@ -80,8 +86,9 @@ export function escapeLike(text) {
 }
 
 export class SearchBar {
-  constructor(win) {
+  constructor(win, host = null) {
     this.win = win;
+    this.host = host;
     this.doc = win.document;
     this.mode = null; // "start" | "launcher" | null
     this.results = []; // [{ url, kind: "search" | "visit" | "page", text?, title? }]
@@ -313,11 +320,22 @@ export class SearchBar {
     let text = this.input.value;
     let query = ++this._query;
     let results = [];
-    let typed = resolveInput(text, { isPrivate: this.isPrivate });
+    let { commandsOnly } = parseQuery(text);
+    let typed = commandsOnly ? null : resolveInput(text, { isPrivate: this.isPrivate });
     if (typed) {
       results.push({ ...typed, kind: typed.search ? "search" : "visit", text: text.trim() });
     }
-    if (text.trim()) {
+    let commands = [];
+    try {
+      commands = (await this.host?.gather(text)) ?? [];
+    } catch (e) {
+      console.error(e);
+    }
+    if (query != this._query) {
+      return;
+    }
+    results.push(...commands);
+    if (text.trim() && !commandsOnly) {
       try {
         let pages = await this.historyMatches(text.trim());
         if (query != this._query) {
@@ -380,6 +398,13 @@ export class SearchBar {
         } else {
           doc.l10n.setAttributes(detail, "evergreen-search-row-search-no-engine");
         }
+      } else if (r.kind == "command") {
+        doc.l10n.setAttributes(label, r.id, r.args);
+        if (r.detail) {
+          detail.textContent = r.detail;
+        } else {
+          doc.l10n.setAttributes(detail, "evergreen-search-row-command");
+        }
       } else if (r.kind == "visit") {
         label.textContent = r.url;
         doc.l10n.setAttributes(detail, "evergreen-search-row-visit");
@@ -412,11 +437,25 @@ export class SearchBar {
   }
 
   /** Open the selected result: in this tab (start page) or a new one. */
-  openSelected() {
+  async openSelected() {
     let text = this.input.value;
     // Results lag typing slightly; Enter always means what is typed now.
     let current = this.resultsFor == text && this.results.length;
-    let result = current ? this.results[this.selected] : resolveInput(text, { isPrivate: this.isPrivate });
+    let result = current ? this.results[this.selected] : null;
+    if (!current) {
+      if (parseQuery(text).commandsOnly) {
+        // Commands are matched without waiting for the list.
+        result = (await this.host?.gather(text))?.[0];
+      } else {
+        result = resolveInput(text, { isPrivate: this.isPrivate });
+      }
+    }
+    if (result?.kind == "command") {
+      this.hide();
+      this.host.run(result.action);
+      this.updateStartPage();
+      return;
+    }
     if (!result?.url) {
       return;
     }
