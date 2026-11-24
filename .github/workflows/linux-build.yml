@@ -190,6 +190,18 @@ jobs:
             /home/runner/eg/dev/smoke-firefox.log
           if-no-files-found: ignore
 
+      - name: Probe (diagnostic, remove): can this workflow create a draft release?
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release create "probe-linux-$GITHUB_RUN_ID" --draft --title probe --notes probe --target "$GITHUB_SHA"; then
+            echo "PROBE: a draft release can be created from the Linux workflow"
+            gh release delete "probe-linux-$GITHUB_RUN_ID" --yes || true
+          else
+            echo "PROBE: the Linux workflow is refused too"
+          fi
+
       - name: Publish GitHub release
         if: success() && inputs.publish
         env:
