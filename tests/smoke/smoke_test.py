@@ -773,17 +773,18 @@ class Run:
                 await sleep(300);
                 let stayed = { space: inTab.getAttribute("evergreen-space"), active: c.activeSpaceId };
                 gB.removeTab(inTab);
-                // A link from another app (OPEN_EXTERNAL) follows the rule too.
+                // A link from another app (Firefox opens it as a tab whose load is
+                // flagged "from external") follows the rule too.
                 await c.applySpace(work.id);
-                let before = gB.tabs.length;
-                let bc = w.browserDOMWindow.openURI(Services.io.newURI(pageB), null,
-                  Ci.nsIBrowserDOMWindow.OPEN_DEFAULTWINDOW, Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL,
-                  Services.scriptSecurityManager.getSystemPrincipal(), null);
-                await sleep(300);
-                let ext = gB.selectedTab;
-                let external = { returned: !!bc, added: gB.tabs.length - before,
-                  space: ext.getAttribute("evergreen-space"), active: c.activeSpaceId, url: ext.linkedBrowser.currentURI.spec };
-                gB.removeTab(ext);
+                let ext = gB.addTab(pageB, { fromExternal: true,
+                  triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() });
+                gB.selectedTab = ext;
+                await until(() => [...gB.tabs].some(t => !t.closing && t.getAttribute("evergreen-space") == personal.id
+                  && t.linkedBrowser.currentURI.spec == pageB), 8000).catch(() => null);
+                let found = gB.tabs.filter(t => !t.closing && t.linkedBrowser.currentURI.spec == pageB);
+                let external = { count: found.length, space: found[0]?.getAttribute("evergreen-space"),
+                  active: c.activeSpaceId, selected: found[0] == gB.selectedTab };
+                for (let t of found) { gB.removeTab(t); }
                 // With the rule gone nothing is routed.
                 c.setRouting("127.0.0.1", null);
                 await c.applySpace(work.id);
@@ -798,7 +799,7 @@ class Run:
             assert vu["space"] == r["personal"] and vu["active"] == r["personal"] and vu["selected"], r
             assert r["stayed"]["space"] == r["work"] and r["stayed"]["active"] == r["work"], f"navigation was routed: {r}"
             ex = r["external"]
-            assert ex["returned"] and ex["space"] == r["personal"] and ex["active"] == r["personal"], r
+            assert ex["count"] == 1 and ex["space"] == r["personal"] and ex["active"] == r["personal"] and ex["selected"], r
             assert r["none"] is None and r["rules"] == "[]", r
             return "new tabs and links from other apps follow a rule; navigation in a tab never does"
 

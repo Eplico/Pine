@@ -209,7 +209,6 @@ class WindowController {
     this.buildPopups();
     this.buildKeys();
     this.wrapNewTabLoading();
-    this.wrapExternalLinks();
     this.layout = new WindowLayout(win);
     this.layout.start();
     this._cleanups.push(() => this.layout.stop());
@@ -226,6 +225,26 @@ class WindowController {
     this.listen(tabs, "TabClose", e => this.onTabClose(e.target));
     this.listen(tabs, "SSTabRestored", e => this.updateBlank(e.target));
     let progress = {
+      onStateChange: (browser, webProgress, request, stateFlags) => {
+        const { STATE_START, STATE_IS_DOCUMENT } = Ci.nsIWebProgressListener;
+        if (
+          !webProgress.isTopLevel ||
+          (stateFlags & (STATE_START | STATE_IS_DOCUMENT)) != (STATE_START | STATE_IS_DOCUMENT) ||
+          !(request instanceof Ci.nsIChannel) ||
+          !request.loadInfo?.loadTriggeredFromExternal ||
+          !(request.URI.schemeIs("http") || request.URI.schemeIs("https"))
+        ) {
+          return;
+        }
+        let tab = this.gBrowser.getTabForBrowser(browser);
+        if (tab && !tab.pinned) {
+          try {
+            this.onExternalLoad(tab, request);
+          } catch (e) {
+            console.error("Evergreen external link", e);
+          }
+        }
+      },
       onLocationChange: (browser, webProgress, request, location) => {
         let tab = webProgress.isTopLevel && this.gBrowser.getTabForBrowser(browser);
         if (tab) {
@@ -634,66 +653,34 @@ class WindowController {
   }
 
   /**
-   * Links from other apps (nsIBrowserDOMWindow.openURI with OPEN_EXTERNAL):
-   * routed to their Space, or into a mini window (evergreen.externalLinks.miniWindow).
-   * Prototype: a wrapper on the window's browserDOMWindow; a real build turns
-   * it into a small hook patch (handoff.md, "Fragile points").
+   * Links from other apps: Firefox opens them in a new tab whose first load is
+   * flagged as coming from outside (LOAD_FLAGS_FROM_EXTERNAL, nsILoadInfo's
+   * loadTriggeredFromExternal). A routed site is moved to its Space; with
+   * evergreen.externalLinks.miniWindow the tab pops out into a mini window.
+   * (The window's browserDOMWindow cannot be wrapped: it is an XPCOM object
+   * whose methods are read-only from JS.)
    */
-  wrapExternalLinks() {
-    let dom = this.win.browserDOMWindow;
-    if (!dom || typeof dom.openURI != "function") {
+  onExternalLoad(tab, request) {
+    let url = request.URI.spec;
+    let space = this.routedSpace(url);
+    if (space && (tab.userContextId || 0) != space.userContextId) {
+      // A tab's container is fixed when it is created: open the page again in
+      // the Space's own and drop this one.
+      request.cancel(Cr.NS_BINDING_ABORTED);
+      let routed = this.openTabInSpace(space, url);
+      this.gBrowser.moveTabToStart(routed);
+      this.gBrowser.removeTab(tab, { animate: false });
+      this.placeRouted(routed, space, true);
+      this.win.focus();
       return;
     }
-    let original = dom.openURI;
-    let controller = this;
-    dom.openURI = function (uri, openWindowInfo, where, flags, ...rest) {
-      let external = !!(flags & Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL);
-      if (!external || openWindowInfo || !uri) {
-        return original.call(this, uri, openWindowInfo, where, flags, ...rest);
-      }
-      let browser = null;
-      try {
-        browser = controller.openExternal(uri, rest[0], rest[1]);
-      } catch (e) {
-        console.error("Evergreen external link", e);
-      }
-      if (browser) {
-        return browser.browsingContext;
-      }
-      let result = original.call(this, uri, openWindowInfo, where, flags, ...rest);
-      if (Services.prefs.getBoolPref(EXTERNAL_MINI_PREF, false)) {
-        try {
-          let tab = controller.gBrowser.getTabForBrowser(result?.embedderElement);
-          if (tab) {
-            controller.popOut(tab);
-          }
-        } catch (e) {
-          console.error("Evergreen external link, mini window", e);
-        }
-      }
-      return result;
-    };
-    this._cleanups.push(() => {
-      delete dom.openURI;
-    });
-  }
-
-  /** The browser a routed external link opened in, or null when no rule applies. */
-  openExternal(uri, triggeringPrincipal, policyContainer) {
-    let space = uri.schemeIs("http") || uri.schemeIs("https") ? this.routedSpace(uri.spec) : null;
-    if (!space) {
-      return null;
+    if (space) {
+      this.placeRouted(tab, space, true);
+      return;
     }
-    let tab = this.gBrowser.addTab(uri.spec, {
-      userContextId: space.userContextId,
-      fromExternal: true,
-      triggeringPrincipal,
-      policyContainer,
-    });
-    this.gBrowser.moveTabToStart(tab);
-    this.placeRouted(tab, space, true);
-    this.win.focus();
-    return tab.linkedBrowser;
+    if (Services.prefs.getBoolPref(EXTERNAL_MINI_PREF, false)) {
+      this.popOut(tab);
+    }
   }
 
   get miniWindows() {

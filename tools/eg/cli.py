@@ -112,6 +112,13 @@ def cmd_check_prefs(args) -> None:
     checks.check_prefs(sources)
 
 
+def cmd_audit_prefs(args) -> None:
+    from . import audit
+
+    text = Path(args.file).read_text(encoding="utf-8") if args.file else audit.fetch()
+    print(audit.report(text, show_missing=not args.differences_only))
+
+
 def cmd_fetch_extensions(args) -> None:
     extensions.fetch_extensions(pin=args.pin)
 
@@ -170,6 +177,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--tree", action="store_true", help="check against the prepared tree")
     s.add_argument("--ref", help="mirror ref (default: the pinned release tag)")
     s.set_defaults(func=cmd_check_prefs)
+
+    s = sub.add_parser("audit-prefs", help="compare Evergreen's prefs with arkenfox's user.js (needs the network)")
+    s.add_argument("--file", help="a local copy of user.js instead of fetching it")
+    s.add_argument("--differences-only", action="store_true", help="skip the list of prefs Evergreen does not set")
+    s.set_defaults(func=cmd_audit_prefs)
 
     s = sub.add_parser("fetch-extensions", help="download bundled extensions")
     s.add_argument("--pin", action="store_true", help="pin unpinned extensions' URL and SHA-256")
