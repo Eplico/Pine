@@ -292,15 +292,12 @@ jobs:
               # the release for the existing tag.
               echo "release creation failed; creating the tag v$version first"
               gh api -i -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/v$version" -f sha="$sha" 2>&1 | sed -n '1,3p;/"message"/p' || true
-              # Which tag names can this token create? (Each probe is deleted again.)
-              for name in "v$version.0" "v$version-win" "w$version" "probe-$version"; do
-                if gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$name" -f sha="$sha" >/dev/null 2>&1; then
-                  echo "PROBE $name: can be created"
-                  gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$name" >/dev/null 2>&1 || echo "  (could not delete the probe tag $name)"
-                else
-                  echo "PROBE $name: refused"
-                fi
-              done
+              # A draft release does not create the tag until it is published: try that.
+              gh release create "v$version" release/* --title "$title" --notes-file release-notes.md --target "$sha" --draft \
+                && echo "DRAFT created; publishing it" \
+                && gh release edit "v$version" --draft=false --latest=false \
+                && exit 0
+              echo "the draft route failed too"
               gh release create "v$version" release/* --title "$title" --notes-file release-notes.md --verify-tag
             fi
           fi
