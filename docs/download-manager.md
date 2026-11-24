@@ -1,6 +1,6 @@
 # Download manager (accelerated, resumable downloads)
 
-Status: first version written for 0.3 (unreleased). Decided by the user's
+Status: 0.3 (unreleased); queue, global limit and extension downloads added after the first version. Decided by the user's
 brief: *built into Evergreen; faster and steadier downloads by splitting a file
 into parts, as download managers do; any engine, as long as it is built in.*
 
@@ -131,8 +131,9 @@ across a restart (it starts again).
   written hands the download to Firefox's own downloader; after that it fails
   with an error (and "Retry" starts again from the beginning).
 - **Connection count:** at most `evergreen.downloads.connections` (default 6,
-  hard limit 16) per download. There is no limit across downloads yet. HTTP/2
-  hosts multiplex the connections on one anyway.
+  hard limit 16) per download, `maxConnections` across all downloads (a
+  first-come queue, `Limiter` in `DownloadPlan.sys.mjs`), and `maxActive`
+  downloads at once. HTTP/2 hosts multiplex the connections on one anyway.
 - **Disk:** the target file is created up front at the announced size, so a
   server announcing a huge `Content-Length` makes a sparse file of that size.
   Downloads above `evergreen.downloads.maxSizeGB` (default 64) are not taken
@@ -151,8 +152,13 @@ across a restart (it starts again).
 | `evergreen.downloads.minSizeMB` | `8` | Smaller files are left to Firefox |
 | `evergreen.downloads.maxSizeGB` | `64` | Larger files are left to Firefox |
 | `evergreen.downloads.excludeHosts` | `""` | Comma-separated hosts (and their subdomains) never accelerated |
+| `evergreen.downloads.maxActive` | `3` | Accelerated downloads running at once; further ones wait for a place (`0` = no limit) |
+| `evergreen.downloads.maxConnections` | `32` | Connections open across all downloads together (`0` = no limit) |
 
-There is no settings page yet; the prefs are reachable from `about:config`.
+There is no settings page. The common settings (on or off, connections per
+download) are commands in the command bar (`Ctrl+T`, then `> download`); every
+pref is also reachable from `about:config`. Why no page: it would need its own
+`about:` module and a patch, for two switches.
 
 ## Performance
 
@@ -172,13 +178,34 @@ is reported to the panel about five times a second.
   starts is stopped and continued by the manager (a short race, see
   `EvergreenDownloads._resume`).
 
+## Queue and limits
+
+`SegmentedSaver.execute()` first takes a *place* from `EvergreenDownloads.places`
+(`maxActive`); a download waiting for one is shown as started with no progress
+yet, and Cancel works while it waits. Each connection (a request for a segment)
+takes a ticket from `EvergreenDownloads.connections` (`maxConnections`) and gives
+it back when the request ends, so downloads share the budget in the order they
+ask. A canceled download leaves both queues at once. There is no *speed* limit.
+
+## Downloads made by extensions and Firefox features
+
+A fresh plain `copy` download (the `downloads` WebExtension API, "Save As"
+from a page, and the like; one younger than 15 seconds and not restored from
+disk) cannot show the first connection's headers, so `probe()` asks the server
+with one request for `bytes=0-0`: a `206` with a `Content-Range` that starts at 0
+proves ranges and gives the size. The rest is the same verdict as for
+navigated downloads. Left alone: downloads whose request an extension shaped
+(`adjustChannel`, a method other than GET). The single connection that was
+already running is canceled, as for navigated downloads. The probe is a second
+request, so a single-use URL is lost like it is for navigated downloads.
+
 ## Not done yet
 
-- Queue and global speed limit (Firefox starts every download at once).
-- Settings page; per-download connection count.
-- Downloads started through the `downloads` WebExtension API and `copy` saver
-  downloads created by Firefox features (not by navigation) are not taken over.
-- Writes on a worker for very slow disks.
+- A speed limit; a per-download connection count.
+- Writes on a worker for very slow disks. Blocked by Firefox: `IOUtils` has no
+  write at an offset, and a worker cannot use `nsIFileOutputStream`, so the
+  only ways are one file per segment joined at the end (a second copy of the
+  whole file) or a native helper (rejected above). Main-thread writes stay.
 - Signature information for Windows reputation checks is not computed.
 
 ## Verification

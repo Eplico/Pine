@@ -367,9 +367,13 @@ class Run:
             # Say why Evergreen did not load: the browser's own error messages.
             try:
                 errors = self.m.execute(
-                    """return Services.console.getMessageArray()
+                    """let script = Services.console.getMessageArray()
                          .filter(m => m instanceof Ci.nsIScriptError && !(m.flags & Ci.nsIScriptError.warningFlag))
-                         .map(m => `${m.sourceName}:${m.lineNumber} ${m.errorMessage}`).slice(0, 15);""",
+                         .map(m => `${m.sourceName}:${m.lineNumber} ${m.errorMessage}`);
+                       let api = Cc["@mozilla.org/consoleAPI-storage;1"].getService(Ci.nsIConsoleAPIStorage)
+                         .getEvents().filter(e => e.level == "error")
+                         .map(e => `${e.filename}:${e.lineNumber} ` + e.arguments.map(a => String(a?.stack ?? a?.message ?? a)).join(" "));
+                       return [...script, ...api].slice(0, 15);""",
                     [],
                 )
                 print("Evergreen did not load. Browser errors:\n  " + "\n  ".join(errors))
@@ -1745,6 +1749,96 @@ class Run:
             same_file("/big.bin", r)
             assert not r["server"]["ranged"] and "segmented" not in r["events"], r
             out.append("off switch")
+
+            # 7. A limit across all downloads: with 2 connections in total a
+            # file that wants 6 still arrives, on at most 2 at once.
+            self.js("Services.prefs.setIntPref('evergreen.downloads.maxConnections', 2);")
+            try:
+                r = get("/big.bin")
+            finally:
+                self.js("Services.prefs.clearUserPref('evergreen.downloads.maxConnections');")
+            same_file("/big.bin", r)
+            assert 1 <= r["server"]["peak"] <= 2, f"the global limit of 2 connections was not kept: {r}"
+            out.append(f"global limit kept (peak {r['server']['peak']})")
+
+            # 8. A queue: with one place, the second download waits for the first.
+            self.files.reset()
+            r = self.js(
+                """
+                let [urlA, urlB, dir] = arguments;
+                let { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
+                let { EvergreenDownloads } = ChromeUtils.importESModule("@BASE@EvergreenDownloads.sys.mjs");
+                let P = Services.prefs;
+                P.setIntPref("browser.download.folderList", 2);
+                P.setStringPref("browser.download.dir", dir);
+                P.setBoolPref("browser.download.useDownloadDir", true);
+                P.setBoolPref("evergreen.downloads.enabled", true);
+                P.setIntPref("evergreen.downloads.maxActive", 1);
+                let list = await Downloads.getList(Downloads.ALL);
+                for (let d of await list.getAll()) { await list.remove(d); }
+                EvergreenDownloads.events.length = 0;
+                let save = url => w.saveURL(url, null, null, null, true, true, null, null, null, false,
+                  Services.scriptSecurityManager.getSystemPrincipal());
+                let find = url => until(async () => (await list.getAll()).find(d => d.source.url == url), 20000);
+                save(urlA);
+                let a = await find(urlA);
+                await until(() => EvergreenDownloads.events.some(e => e.action == "segmented"), 20000);
+                await until(() => a.currentBytes > 1024 * 1024, 30000);
+                save(urlB);
+                let b = await find(urlB);
+                await sleep(3000); // plenty of time to start, if it were allowed to
+                let whileFirstRuns = {
+                  firstDone: a.succeeded, secondBytes: b.currentBytes, secondDone: b.succeeded,
+                  segmented: EvergreenDownloads.events.filter(e => e.action == "segmented").length,
+                  waiting: EvergreenDownloads.places.waiting,
+                };
+                await until(() => (a.succeeded || a.error) && (b.succeeded || b.error), 120000);
+                let out = { whileFirstRuns, a: a.succeeded, b: b.succeeded,
+                  shaA: a.succeeded ? await IOUtils.computeHexDigest(a.target.path, "sha256") : null,
+                  shaB: b.succeeded ? await IOUtils.computeHexDigest(b.target.path, "sha256") : null,
+                  segmented: EvergreenDownloads.events.filter(e => e.action == "segmented").length };
+                P.clearUserPref("evergreen.downloads.maxActive");
+                return out;
+                """,
+                self.files.url("/pause.bin"), self.files.url("/big.bin"), dl_dir,
+            )
+            wf = r["whileFirstRuns"]
+            assert not wf["firstDone"] and not wf["secondDone"] and wf["segmented"] == 1 and wf["waiting"] == 1, (
+                f"the second download should wait for a place: {r}"
+            )
+            assert r["a"] and r["b"] and r["segmented"] == 2, r
+            assert r["shaA"] == self.files.sha["/pause.bin"] and r["shaB"] == self.files.sha["/big.bin"], r
+            out.append("a second download waits for a place, then runs")
+
+            # 9. A download made by an extension or a Firefox feature (a plain
+            # "copy" download that was never a navigation) is taken over too.
+            self.files.reset()
+            r = self.js(
+                """
+                let [url, dir] = arguments;
+                let { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
+                let { EvergreenDownloads } = ChromeUtils.importESModule("@BASE@EvergreenDownloads.sys.mjs");
+                Services.prefs.setBoolPref("evergreen.downloads.enabled", true);
+                let list = await Downloads.getList(Downloads.ALL);
+                for (let d of await list.getAll()) { await list.remove(d); }
+                EvergreenDownloads.events.length = 0;
+                let dl = await Downloads.createDownload({
+                  source: { url, isPrivate: false },
+                  target: { path: PathUtils.join(dir, "from-extension.bin") },
+                });
+                await list.add(dl);
+                dl.start().catch(() => {});
+                await until(() => dl.succeeded || dl.error, 90000);
+                return { ok: dl.succeeded, error: dl.error?.message ?? null,
+                  sha: dl.succeeded ? await IOUtils.computeHexDigest(dl.target.path, "sha256") : null,
+                  events: EvergreenDownloads.events.map(e => e.action + (e.reason ? ":" + e.reason : "")) };
+                """,
+                self.files.url("/big.bin"), dl_dir,
+            )
+            assert r["ok"] and r["sha"] == self.files.sha["/big.bin"], r
+            assert "adopted" in r["events"] and "segmented" in r["events"], r
+            assert self.files.stats["/big.bin"]["peak"] >= 3, f"expected several connections: {self.files.stats['/big.bin']}"
+            out.append("a download made by an extension is taken over too")
             return "; ".join(out)
 
 

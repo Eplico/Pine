@@ -373,12 +373,12 @@ tool only and is never part of a build.
 | Favorites | Favorites | Firefox pinned tabs | **Prototype** (uses Firefox's pinned-tab grid) |
 | Pinned tabs and folders | "Keep in Space" now; folders later | Tab values; native tab groups | **Prototype** (keep) / planned |
 | Today tabs + auto-archive | Archive | New (Evergreen) | **Prototype** |
-| Split View (up to 4) | Split view (2 panes) | Native split view (149+) | Planned |
-| New tab (Command Bar) | New-tab search box | Evergreen overlay; Firefox's address parsing and default engine | **Prototype** (search, addresses, history); commands planned |
+| Split View (up to 4) | Split view (2 panes) | Native split view (149+), started from the command bar | **Prototype** |
+| New tab (Command Bar) | Command bar | Evergreen overlay; Firefox's address parsing and default engine | **Prototype** (search, addresses, history, commands) |
 | Empty start page | Start page | Evergreen overlay over Firefox's home and new-tab pages | **Prototype** |
-| Peek | Peek | Normal tab shown in an overlay | Planned |
-| Little Arc | Mini window | Compact window for external links | Planned |
-| Air Traffic Control | Link routing | New (Evergreen) | Planned |
+| Peek | Peek | Firefox's mini window (160+) | **Prototype** |
+| Little Arc | Mini window | Firefox's mini window; optional for external links | **Prototype** |
+| Air Traffic Control | Link routing | New (Evergreen); rules in a pref, set from the command bar | **Prototype** |
 | Boosts | Deferred; CSS-only if ever | — | — |
 | Easels, Notes, Library, Arc Max (AI) | Not planned | — | — |
 
@@ -468,9 +468,13 @@ dots, `Ctrl+Shift+1…9`, or by selecting a tab that belongs to another Space
 
 ### 7.4 Split view
 
-Evergreen will use **Firefox's native split view** (149+) unchanged and show a
-split pair as one row in the sidebar. More than two panes should be built
-upstream first.
+Evergreen uses **Firefox's native split view** (149+) unchanged: the command
+bar's "Split view" runs `BrowserCommands.addTabSplitView()` (the current tab and
+a new `about:opentabs` tab to choose the partner from) and "Close split view"
+runs `separateTabSplitView()`. Showing a split pair as one row in the sidebar is
+Firefox's own wrapper element (`tab-split-view-wrapper`) in the vertical tab
+list; whether it looks right inside the Space header and footer has not been
+checked by eye. More than two panes should be built upstream first.
 
 ### 7.5 New tab and command bar
 
@@ -485,10 +489,18 @@ bookmarks. Escape, or a click outside the box, closes it without opening a
 tab. (`EvergreenSearch.sys.mjs` replaces `BrowserCommands.openTab` when it
 is called without an address.)
 
-Later, the box will grow into a **command bar**: switching Space, moving a
-tab to a Space, searching the Archive and Evergreen commands. Whether to
-build that on a floating instance of the Firefox address bar (its providers
-and keyboard handling) is still open.
+**Command bar (0.3).** The same box runs commands (`Commands.sys.mjs`: pure
+matching and ranking, unit-tested; `EvergreenWindow` carries out the actions,
+which are plain data). Matching commands follow what is typed (after two
+characters); text starting with `>` lists commands only. Commands: switch to a
+Space, move the tab to a Space, keep the tab in its Space, switch to any open
+tab (all Spaces), reopen from the Archive, new Space, split view, pop out to a
+mini window, "Always open this site in a Space" and a few settings (faster
+downloads, connections, Peek, links from other apps). It is the settings page
+for now: `set-pref` actions are checked against a fixed list (`SETTINGS`), so
+the data can't set any other pref. It stays a separate overlay, not Firefox's
+address bar, so the address bar keeps its own behaviour and security
+indicators.
 
 **Start page.** When a Space has no tabs (the browser starts with nothing to
 restore, or the last tab is closed) the page area shows a solid page in the
@@ -508,20 +520,30 @@ and only http(s), file and about: addresses are opened from the box.
 
 ### 7.6 Peek
 
-Links from a Favorite to another site will open in **Peek**, a floating panel
-that is a normal tab in the same Space and container (principle 2).
+A link from a Favorite to another site opens in **Peek**: Firefox's own mini
+window (160+, always on top, with its own button to put the tab back), holding
+a normal tab in the same Space and container (principle 2). Only tabs opened
+from a pinned tab, in the foreground, that first load a web page on a different
+site are popped out (`maybePeek`); background tabs, popups and navigation in the
+Favorite are left alone. `evergreen.peek.enabled` turns it off. This is not
+Arc's in-page sheet: it is a separate small window.
 
 ### 7.7 Mini window (links from other apps)
 
-Links from other apps will open in a compact window that can be promoted to a
-Space. Option: "Open links from other apps in a temporary container",
-**off by default** (decision Q8).
+Firefox 160 has native **mini windows**; Evergreen uses them: the command "Pop out
+to a mini window", Peek (§7.6), and, with `evergreen.externalLinks.miniWindow`
+(**off by default**), links from other apps. The option "Open links from other
+apps in a temporary container" (decision Q8) is not built.
 
 ### 7.8 Link routing
 
-Rules mapping hosts to Spaces will apply only to **new top-level loads**,
-never to navigation inside a tab (that would break OAuth/SSO redirects and let
-a site move itself between containers).
+Rules mapping hosts to Spaces (`LinkRouting.sys.mjs`: a host and its subdomains,
+the longest wins; stored as JSON in `evergreen.routing.rules`) apply only to
+**new top-level loads** from the browser's own UI (the search box, bookmarks) and
+to links from other apps, never to navigation inside a tab and never to links
+clicked on a page (that would break OAuth/SSO redirects and let a site move
+itself between containers). A rule's Space that no longer exists is ignored.
+Rules are added and removed from the command bar for the current site.
 
 ### 7.9 Deferred and not planned
 
@@ -768,7 +790,7 @@ Firefox 136).
 |---|---|---|
 | **M0 Foundations** | Build tooling, source verification, branding, prefs, uBO bundling, CI; Windows release builds; prefs audit and egress test; arkenfox/LibreWolf prefs review | Tooling, CI and the Windows build workflow done; prefs audit and egress test pending |
 | **M1 Sidebar & Spaces** | Sidebar, Spaces with sign-in identities, Favorites, kept tabs, Archive | **Prototype done** (dev harness, smoke-tested); next: folders, navigation in the sidebar, polish |
-| **M2 Multitasking** | Split view integration, command bar, Peek, mini window, link routing | Not started |
+| **M2 Multitasking** | Split view integration, command bar, Peek, mini window, link routing | **Prototype done** (CI-tested in a real Firefox, not yet used daily); polish and the hook patches remain |
 | **M3 Ship** | Code signing, MAR updates via GitHub releases, security review, public beta | Unsigned preview releases only |
 | **Later** | Linux and macOS packages, CSS-only Boosts, 4-pane split (upstream-first), isolated-profile Spaces | — |
 
