@@ -190,7 +190,7 @@ jobs:
             /home/runner/eg/dev/smoke-firefox.log
           if-no-files-found: ignore
 
-      - name: Probe (diagnostic, remove): can this workflow create a draft release?
+      - name: Probe (diagnostic, remove) - can this workflow create a draft release
         if: inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
