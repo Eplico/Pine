@@ -1,6 +1,6 @@
 # Evergreen: handoff
 
-Written 2026-11-21, updated 2026-11-23. It describes the state of the branch
+Written 2026-11-21, updated 2026-11-24. It describes the state of the branch
 `claude/determined-cerf-v1dp7l` (Evergreen **0.2**, on Firefox **160.0.1**, not
 yet released) and the published release **v0.1.1**. See "Update, 0.2" below
 for what changed since the first version of this document. Read this first, then [design.md](design.md) (the why)
@@ -386,14 +386,21 @@ Other places:
 
 ## Next steps, roughly in order
 
-1. Run the **Linux build** (it changed: the UI code is compiled in, so run
-   44856584591 is out of date), read the smoke test and the desktop check in its
-   log, then ask the user whether to publish (*Publish* ticked, or `from_run`).
-   Publishing 0.2 also needs a Windows build, first run on 160.0.1. Check for
-   newer Firefox security releases first (see "Urgent"; 160.0.1 was newest on
-   2026-11-23).
-2. Signed updates: Windows in-app update (download, verify, run the installer);
-   later signed MAR updates (M3, design.md §9.4).
+1. **Builds in flight** (started 2026-11-23 on `70f5e03`, *Publish* ticked, so they
+   publish by themselves only if their smoke test passes): Linux build run
+   `45288812860` (publishes `v0.2-linux`), Windows build run `45288816571`
+   (first ever on Firefox 160.0.1; publishes `v0.2` as Latest). Check them with
+   `curl https://api.github.com/repos/Eplico/Pine/actions/runs?per_page=6`.
+   Read a failure in the job log (the smoke test and the Linux desktop check
+   `tests/linux/check_desktop_integration.py` print their results; that check is
+   still `continue-on-error` until it has passed once; the Windows run also runs
+   `check_installer.ps1`). Fix, push, rerun (`from_run` re-tests a package
+   without recompiling). If both published: verify the releases, then install
+   with `python3 evergreen-install` from the Linux release and accept the "use my
+   earlier data" offer (the user does this). Check for newer Firefox security
+   releases first (see "Urgent"; 160.0.1 was newest on 2026-11-23).
+2. Signed updates (M3, design.md §9.4). The Windows in-app update exists
+   (download, check, run the installer) but running the installer is untested.
 3. Turn the monkeypatches listed above into small hook patches.
 4. M2 features: command bar (grow the `Ctrl+T` box: switch Space, move tab,
    search the Archive), split view on Firefox's native one, Peek, mini window,
