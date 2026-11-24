@@ -27,10 +27,12 @@ import os
 import re
 import shutil
 import socket
+import socketserver
 import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -271,6 +273,67 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+class EgressProxy:
+    """A proxy that records where the browser tries to go and answers nothing.
+
+    Every CONNECT (HTTPS) and absolute-URI request (HTTP) it receives is a host
+    the browser wanted to contact; each is refused with 403. Local pages and
+    Marionette bypass it (127.0.0.1 is on the browser's no-proxy list).
+    """
+
+    def __init__(self):
+        self.hosts: dict[str, int] = {}
+        self.order: list[str] = []
+        self.lock = threading.Lock()
+        proxy = self
+
+        class Handler(socketserver.StreamRequestHandler):
+            def handle(self):
+                try:
+                    line = self.rfile.readline(4096).decode("latin-1").strip()
+                    parts = line.split()
+                    if len(parts) < 2:
+                        return
+                    target = parts[1]
+                    if parts[0] == "CONNECT":
+                        host = target.rsplit(":", 1)[0]
+                    else:
+                        host = urllib.parse.urlsplit(target).hostname or target
+                    proxy.record(host.strip("[]").lower())
+                    self.wfile.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                except OSError:
+                    pass
+
+        class Server(socketserver.ThreadingMixIn, socketserver.TCPServer):
+            allow_reuse_address = True
+            daemon_threads = True
+
+        self.server = Server(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def record(self, host: str):
+        with self.lock:
+            if host not in self.hosts:
+                self.order.append(host)
+            self.hosts[host] = self.hosts.get(host, 0) + 1
+
+    @staticmethod
+    def allowed(host: str, patterns: list[str]) -> bool:
+        return any(host == p or (p.startswith("*.") and host.endswith(p[1:])) for p in patterns)
+
+
+EGRESS_ALLOWED = Path(__file__).with_name("egress-allowed.txt")
+
+
+def read_egress_allowed() -> list[str]:
+    """Host patterns the browser may contact (one per line, "*.example.com" allowed, # comments)."""
+    if not EGRESS_ALLOWED.exists():
+        return []
+    lines = (line.split("#", 1)[0].strip().lower() for line in EGRESS_ALLOWED.read_text(encoding="utf-8").splitlines())
+    return [line for line in lines if line]
+
+
 class Run:
     def __init__(self, args):
         self.args = args
@@ -297,6 +360,7 @@ class Run:
             self.module_base = "resource://evergreen/"
             self.version = egdev.build_info(layout)[0]
             self.product = "Firefox (dev harness)"
+        self.egress = EgressProxy() if args.egress else None
         self.profile = egdev.dev_root() / "smoke-profile"
         shutil.rmtree(self.profile, ignore_errors=True)
         self.profile.mkdir(parents=True)
@@ -321,7 +385,19 @@ class Run:
                     # Test-only: the local page server is plain HTTP on localhost.
                     'user_pref("dom.security.https_only_mode", false);',
                     'user_pref("network.trr.mode", 5);',
-                    'user_pref("network.proxy.type", 0);',
+                    *(
+                        [
+                            # --egress: everything not local goes to the recording proxy.
+                            'user_pref("network.proxy.type", 1);',
+                            'user_pref("network.proxy.http", "127.0.0.1");',
+                            f'user_pref("network.proxy.http_port", {self.egress.port});',
+                            'user_pref("network.proxy.ssl", "127.0.0.1");',
+                            f'user_pref("network.proxy.ssl_port", {self.egress.port});',
+                            'user_pref("network.proxy.no_proxies_on", "localhost, 127.0.0.1");',
+                        ]
+                        if self.egress
+                        else ['user_pref("network.proxy.type", 0);']
+                    ),
                     'user_pref("browser.shell.checkDefaultBrowser", false);',
                     # The first-run import window would cover the browser;
                     # the "import offer" check opens it on purpose.
@@ -1903,6 +1979,19 @@ class Run:
         self.check("Windows update: installer downloaded and checked against the checksums", windows_installer_download)
         self.check("new installation: offers the earlier profile with more data", profile_adoption)
         self.check("accelerated downloads: several connections, retries, resume, fallbacks", accelerated_downloads)
+        def egress():
+            hosts = self.egress.order
+            allowed = read_egress_allowed()
+            for host in hosts:
+                print(f"EGRESS {host} x{self.egress.hosts[host]}" + ("" if not allowed or self.egress.allowed(host, allowed) else "  NOT ALLOWED"))
+            if not allowed:
+                return f"{len(hosts)} host(s) contacted; no allow-list yet (tests/smoke/egress-allowed.txt), nothing enforced"
+            bad = [h for h in hosts if not self.egress.allowed(h, allowed)]
+            assert not bad, "the browser tried to contact hosts that are not allowed: " + ", ".join(bad)
+            return f"{len(hosts)} host(s) contacted, all on the allow-list"
+
+        if self.egress:
+            self.check("network egress: only allowed hosts are contacted", egress)
         self.check("no Evergreen errors in the console", console_errors)
         self.quit()
         print(f"\n{len(self.failures)} failed" if self.failures else "\nAll checks passed")
@@ -1914,6 +2003,8 @@ def main():
     p.add_argument("--firefox", help="Firefox install directory for the dev harness (default: standard location)")
     p.add_argument("--binary", help="test a built Evergreen instead (path to evergreen.exe / evergreen)")
     p.add_argument("--headless", action="store_true", help="run Firefox with -headless")
+    p.add_argument("--egress", action="store_true",
+                   help="route traffic through a recording proxy and list (and, with an allow-list, restrict) the hosts contacted")
     p.add_argument("--screenshots", help="directory to save screenshots in")
     p.add_argument("--log-screenshots", action="store_true",
                    help="also print each screenshot to the log as a small JPEG data URL")

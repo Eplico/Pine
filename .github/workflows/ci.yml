@@ -94,7 +94,9 @@ jobs:
           if [ -n "${FIREFOX_DIR:-}" ]; then args+=(--firefox "$FIREFOX_DIR"); fi
           # Linux job logs carry small screenshots ("EVERGREEN-SHOT <name> data:...")
           # for runs where artifacts cannot be downloaded.
-          if [ "$RUNNER_OS" = "Linux" ]; then args+=(--log-screenshots); fi
+          # Linux also records where the browser tries to connect ("EGRESS <host>"
+          # lines; tests/smoke/egress-allowed.txt says which are allowed).
+          if [ "$RUNNER_OS" = "Linux" ]; then args+=(--log-screenshots --egress); fi
           python tests/smoke/smoke_test.py "${args[@]}"
       - name: Upload screenshots and Firefox log
         if: always()

@@ -1,0 +1,5 @@
+# Hosts the browser may contact during the smoke test (`smoke_test.py --egress`).
+# One host per line; "*.example.com" matches subdomains; "#" starts a comment.
+# While this list has no entries the test only prints what was contacted
+# ("EGRESS <host> x<count>" lines in the log). Fill it from a real run and each
+# host gets a reason; anything else then fails the run. See docs/prefs-audit.md.
