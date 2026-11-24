@@ -1885,7 +1885,9 @@ class Run:
                 await until(() => a.currentBytes > 1024 * 1024, 30000);
                 save(urlB);
                 let b = await find(urlB);
-                await sleep(3000); // plenty of time to start, if it were allowed to
+                // B is taken over, then waits for a place while A runs.
+                await until(() => EvergreenDownloads.places.waiting == 1 || a.succeeded, 20000).catch(() => null);
+                await sleep(2000); // time to start, if it were allowed to
                 let whileFirstRuns = {
                   firstDone: a.succeeded, secondBytes: b.currentBytes, secondDone: b.succeeded,
                   segmented: EvergreenDownloads.events.filter(e => e.action == "segmented").length,
@@ -1941,6 +1943,59 @@ class Run:
             return "; ".join(out)
 
 
+        def resume_after_restart():
+            dl_dir = str(egdev.dev_root() / "smoke-downloads")
+            url = self.files.url("/queue.bin")
+            self.files.reset()
+            before = self.js(
+                """
+                let [url, dir] = arguments;
+                let { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
+                let { EvergreenDownloads } = ChromeUtils.importESModule("@BASE@EvergreenDownloads.sys.mjs");
+                let P = Services.prefs;
+                P.setIntPref("browser.download.folderList", 2);
+                P.setStringPref("browser.download.dir", dir);
+                P.setBoolPref("browser.download.useDownloadDir", true);
+                P.setBoolPref("evergreen.downloads.enabled", true);
+                P.setIntPref("evergreen.downloads.maxActive", 3);
+                let list = await Downloads.getList(Downloads.ALL);
+                for (let d of await list.getAll()) { await list.remove(d); }
+                EvergreenDownloads.events.length = 0;
+                w.saveURL(url, null, null, null, true, true, null, null, null, false,
+                          Services.scriptSecurityManager.getSystemPrincipal());
+                let dl = await until(async () => (await list.getAll()).find(d => d.source.url == url), 20000);
+                await until(() => EvergreenDownloads.events.some(e => e.action == "segmented"), 20000);
+                await until(() => dl.currentBytes > 4 * 1024 * 1024, 30000);
+                return { bytes: dl.currentBytes, succeeded: dl.succeeded };
+                """,
+                url, dl_dir,
+            )
+            assert not before["succeeded"], f"the file finished before the browser was closed: {before}"
+            self.errors_before_restart += self.js("return evergreenConsoleErrors();")
+            self.quit()
+            self.launch()
+            after = self.js(
+                """
+                let [url] = arguments;
+                let { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
+                let { EvergreenDownloads } = ChromeUtils.importESModule("@BASE@EvergreenDownloads.sys.mjs");
+                let list = await Downloads.getList(Downloads.ALL);
+                let dl = await until(async () => (await list.getAll()).find(d => d.source.url == url), 20000);
+                await until(() => dl.succeeded || (dl.error && dl.stopped), 90000);
+                return { succeeded: dl.succeeded, error: dl.error?.message ?? null,
+                  sha: dl.succeeded ? await IOUtils.computeHexDigest(dl.target.path, "sha256") : null,
+                  events: EvergreenDownloads.events.map(e => e.action + (e.reason ? ":" + e.reason : "")) };
+                """,
+                url,
+            )
+            assert after["succeeded"] and after["sha"] == self.files.sha["/queue.bin"], f"the download did not finish after a restart: {before} {after}"
+            ranged = self.files.stats["/queue.bin"]["ranged"]
+            assert "resume" in after["events"], after
+            assert ranged and not any(r.startswith("bytes=0-") for r in ranged), (
+                f"after the restart the file should continue, not start again: {ranged}"
+            )
+            return f"closed at {before['bytes'] // 1024} KiB, finished after the restart from where it stopped"
+
         def console_errors():
             r = self.errors_before_restart + self.js("return evergreenConsoleErrors();")
             assert not r, "\n  " + "\n  ".join(r)
@@ -1992,6 +2047,7 @@ class Run:
             assert not bad, "the browser tried to contact hosts that are not allowed: " + ", ".join(bad)
             return f"{len(hosts)} host(s) contacted, all on the allow-list"
 
+        self.check("a download continues after the browser is closed and reopened", resume_after_restart)
         if self.egress:
             self.check("network egress: only allowed hosts are contacted", egress)
         self.check("no Evergreen errors in the console", console_errors)

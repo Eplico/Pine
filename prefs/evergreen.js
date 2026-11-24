@@ -147,6 +147,11 @@ pref("breakpad.reportURL", "");
 pref("browser.newtabpage.activity-stream.asrouter.userprefs.cfr.addons", false);
 pref("browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features", false);
 
+// No lookup of the country from the network address (location.services.mozilla.com):
+// the search engine is chosen by Evergreen, not by region.
+pref("browser.region.update.enabled", false);
+pref("browser.region.network.url", "");
+
 // --- Evergreen -------------------------------------------------------------------
 // Unpinned tabs not used for this many hours move to the Archive (0 = never).
 pref("evergreen.archive.afterHours", 12);

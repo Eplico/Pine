@@ -66,6 +66,22 @@ clearing, restarts, private windows and the default prefs. CI runs all of the
 above on every push, including the smoke test in the Firefox installed on
 GitHub's Windows and Linux runners.
 
+### Egress test and prefs audit
+
+```
+python tests/smoke/smoke_test.py --egress   # CI runs this on Linux
+python eg.py audit-prefs                    # Evergreen's prefs against arkenfox's user.js
+```
+
+`--egress` points the browser at a proxy that records every host it is asked to
+reach and answers each with 403 (local pages bypass it). The run prints
+`EGRESS <host> xN` lines and, if `tests/smoke/egress-allowed.txt` lists any
+hosts, fails when the browser contacts one that is not on it. Note that the
+smoke profile sets a few test-only prefs (DNS-over-HTTPS off, HTTPS-Only off,
+updates off), so this measures the browser at rest, not Evergreen's full
+defaults; run it with `--binary` against a build for the packaged behaviour.
+`audit-prefs` is described in [prefs-audit.md](prefs-audit.md).
+
 ## Real build (Windows)
 
 These are the same steps the Windows build workflow runs.

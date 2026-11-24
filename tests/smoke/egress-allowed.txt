@@ -1,5 +1,27 @@
 # Hosts the browser may contact during the smoke test (`smoke_test.py --egress`).
 # One host per line; "*.example.com" matches subdomains; "#" starts a comment.
-# While this list has no entries the test only prints what was contacted
-# ("EGRESS <host> x<count>" lines in the log). Fill it from a real run and each
-# host gets a reason; anything else then fails the run. See docs/prefs-audit.md.
+# Anything else fails the run. Written from a real run (2026-11-24); each line
+# says why it is allowed, so a new host is a question to answer, not noise.
+
+# Mozilla services Evergreen uses on purpose (decision Q6): Remote Settings (the
+# certificate revocation lists, blocklists, tracker lists) and its signatures.
+firefox.settings.services.mozilla.com
+firefox-settings-attachments.cdn.mozilla.net
+content-signature-2.cdn.mozilla.net
+# Web push (service workers and notifications): connects at startup.
+push.services.mozilla.com
+# Captive-portal detection (a plain request to see whether a hotspot wants a login).
+# Kept on purpose: see docs/prefs-audit.md.
+firefox-portal-detection.com
+# Media plug-ins Firefox downloads on demand (Widevine, OpenH264). A decision for
+# the owner: they can be switched off (media.gmp-provider.enabled), at the price of
+# DRM video and H.264 calls.
+update.googleapis.com
+ciscobinary.openh264.org
+
+# Only the dev harness (a copy of an installed Firefox): the update check. A real
+# Evergreen build has no updater and never asks.
+aus5.mozilla.org
+# Observed once at start-up in the harness, source not identified yet (a first-run
+# page of Firefox's own?). Check in a real build with --binary.
+www.mozilla.org
