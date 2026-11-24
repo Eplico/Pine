@@ -14,15 +14,18 @@ and [prefs-audit.md](prefs-audit.md).
 the command bar, link routing, Peek and mini windows, split view from the
 command bar, the download manager (queue, global limit, extension downloads,
 resume after a restart), a recording of what the browser contacts, and the
-prefs audit. `v0.2-linux` is published (its smoke test and the desktop
-integration check passed on the real build; the tarball and `evergreen-install`
-match `SHA256SUMS.txt`).
+prefs audit. `v0.2-linux` (2026-11-24, 00:34 UTC) and **`v0.3-linux`** (01:13 UTC, with the
+command bar, routing, Peek and the download queue) are published: the packaged
+browser passed the whole smoke test and the desktop integration check, and the
+tarball and `evergreen-install` match `SHA256SUMS.txt` (checked by downloading
+them). The desktop check once failed on a race (the window's icon is set a moment
+after its class); it now waits for the icon.
 
 **Not done, and why (so nobody has to rediscover it):**
 
 | What | State |
 |---|---|
-| Windows build on 160.0.1 | Run `45288816571` was still compiling when this was written; see "Next steps" 1. |
+| Windows build on 160.0.1 | Two runs queued one behind the other (the workflow allows one at a time): `45288816571` (0.2, on `70f5e03`) and `45299144297` (0.3, on `301fc3e`). Neither had finished when this was written (the first compiles from a cold cache; earlier builds took 57-86 min, this one is past two hours). See "Next steps" 1. |
 | Signed updates (design §9.4) and code signing | Need things only the owner can provide: a code-signing certificate, and an offline MAR signing key (see "Signing: what is needed"). Not started. |
 | Hook patches instead of the monkeypatches | Decided against, for now: see "Hook patches: the decision". |
 | Writes on a worker (slow disks) | Blocked by Firefox: `IOUtils` has no write at an offset (download-manager.md). |
@@ -49,7 +52,7 @@ product is **Evergreen**.
 | What | Where |
 |---|---|
 | Code | GitHub `Eplico/Pine`, branch `claude/relaxed-bardeen-ojrswr` (all work so far; no pull request has been opened) |
-| Releases | <https://github.com/Eplico/Pine/releases>: **v0.2-linux** (2026-11-24), then the Windows ones: v0.1.1 (latest), v0.1, two older `v157.0-N` previews. `v0.2` for Windows follows the Windows build run (Next steps 1) |
+| Releases | <https://github.com/Eplico/Pine/releases>: **v0.3-linux**, v0.2-linux (2026-11-24), then the Windows ones: v0.1.1 (latest), v0.1, two older `v157.0-N` previews. `v0.2` for Windows follows the Windows build run (Next steps 1) |
 | CI | `.github/workflows/ci.yml` on every push: lint, unit and tooling tests, patch and pref checks against the pinned Firefox, smoke test in Firefox on Linux (the pinned 160.0.1) and Windows (the runner's Firefox) |
 | Windows build | `.github/workflows/windows-build.yml`, started by hand (Actions › Windows build › Run workflow) or by pushing a `v<VERSION>` tag. About 90 minutes |
 | Design | `docs/design.md`: goals, threat model, architecture, features, decisions (Q1–Q11), milestones |
