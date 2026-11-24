@@ -224,10 +224,9 @@ jobs:
             C:\eg\dev\installer-ui\
           if-no-files-found: ignore
 
-  # Publishing runs on a Linux runner. The Windows job's own token got
-  # "HTTP 403: Resource not accessible by integration" creating releases (runs
-  # 45288816571 and 45299144297, both with contents: write), while the same call
-  # from the Linux workflow works; so the release is created from here.
+  # Publishing runs on a Linux runner (the bash below is shared in spirit with the
+  # Linux workflow). Cause of the 403s the Windows job once got creating the release:
+  # see the comment at the `gh release create` call.
   publish:
     name: Publish the release
     needs: test-and-publish
@@ -281,21 +280,9 @@ jobs:
             sed -i '/^| `Evergreen-[^`]*-setup\.exe`/d' release-notes.md
           fi
           title="Evergreen $version for Windows"
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            gh release create "$GITHUB_REF_NAME" release/* --title "$title" --notes-file release-notes.md --verify-tag
-          else
-            if ! gh release create "v$version" release/* --title "$title" --notes-file release-notes.md --target "$sha"; then
-              # Creating the release (and its tag in one call) is refused with a 403
-              # for this tag name. Try the tag on its own, with the full reply, then
-              # the release for the existing tag.
-              echo "release creation failed; creating the tag v$version first"
-              gh api -i -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/v$version" -f sha="$sha" 2>&1 | sed -n '1,3p;/"message"/p' || true
-              # A draft release does not create the tag until it is published: try that.
-              gh release create "v$version" release/* --title "$title" --notes-file release-notes.md --target "$sha" --draft \
-                && echo "DRAFT created; publishing it" \
-                && gh release edit "v$version" --draft=false --latest=false \
-                && exit 0
-              echo "the draft route failed too"
-              gh release create "v$version" release/* --title "$title" --notes-file release-notes.md --verify-tag
-            fi
-          fi
+          # The tag goes on the commit this run is on, not on the commit the packages
+          # were built from (with from_run they differ): GitHub refuses a tag or release
+          # for a commit whose .github/workflows differ from the run's own, with
+          # "HTTP 403: Resource not accessible by integration". The build commit is in
+          # the notes and the run URL.
+          gh release create "v$version" release/* --title "$title" --notes-file release-notes.md --target "$GITHUB_SHA"

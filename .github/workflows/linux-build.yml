@@ -84,25 +84,12 @@ jobs:
           if ! ls release/*-setup.exe >/dev/null 2>&1; then
             sed -i '/^| `Evergreen-[^`]*-setup\.exe`/d' release-notes.md
           fi
-          if ! gh release create "v$version" release/* --title "Evergreen $version for Windows" \
-            --notes-file release-notes.md --target "$sha"; then
-            # Diagnostic (remove once the cause is known): which part is refused?
-            for tag in "v$version" "probe-$FROM_RUN"; do
-              for target in "$sha" "$GITHUB_SHA"; do
-                for notes in "release-notes.md" ""; do
-                  if [ -n "$notes" ]; then n=(--notes-file "$notes"); else n=(--notes x); fi
-                  name="$tag-d"
-                  if gh release create "$name" --draft --title t "${n[@]}" --target "$target" >/dev/null 2>&1; then
-                    echo "PROBE draft tag=$tag target=${target:0:7} notes=${notes:-short}: allowed"
-                    gh release delete "$name" --yes >/dev/null 2>&1 || true
-                  else
-                    echo "PROBE draft tag=$tag target=${target:0:7} notes=${notes:-short}: REFUSED"
-                  fi
-                done
-              done
-            done
-            exit 1
-          fi
+          # The tag goes on the commit this run is on, not on the commit the packages
+          # were built from: GitHub refuses (HTTP 403, "Resource not accessible by
+          # integration") a tag or release for a commit whose .github/workflows differ
+          # from the run's own. The build commit stays in the notes and the run URL.
+          gh release create "v$version" release/* --title "Evergreen $version for Windows" \
+            --notes-file release-notes.md --target "$GITHUB_SHA"
 
   build:
     name: Build Evergreen for Linux
@@ -284,4 +271,4 @@ jobs:
           # Its own release (tag v<VERSION>-linux), so it never replaces the
           # Windows release as the repository's latest.
           gh release create "v$version-linux" release/* --title "Evergreen $version for Linux" \
-            --notes-file release-notes.md --target "$sha" --latest=false
+            --notes-file release-notes.md --target "$GITHUB_SHA" --latest=false
