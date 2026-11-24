@@ -286,5 +286,12 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             gh release create "$GITHUB_REF_NAME" release/* --title "$title" --notes-file release-notes.md --verify-tag
           else
-            gh release create "v$version" release/* --title "$title" --notes-file release-notes.md --target "$sha"
+            if ! gh release create "v$version" release/* --title "$title" --notes-file release-notes.md --target "$sha"; then
+              # Creating the release (and its tag in one call) is refused with a 403
+              # for this tag name. Try the tag on its own, with the full reply, then
+              # the release for the existing tag.
+              echo "release creation failed; creating the tag v$version first"
+              gh api -i -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/v$version" -f sha="$sha" || true
+              gh release create "v$version" release/* --title "$title" --notes-file release-notes.md --verify-tag
+            fi
           fi
