@@ -10,6 +10,10 @@ firefox-settings-attachments.cdn.mozilla.net
 content-signature-2.cdn.mozilla.net
 # Web push (service workers and notifications): connects at startup.
 push.services.mozilla.com
+# Safe Browsing's list updates (kept on: Evergreen sends no download metadata,
+# only fetches the local lists). They come a few minutes into a session, so a
+# run sees them only sometimes.
+safebrowsing.googleapis.com
 # Captive-portal detection (a plain request to see whether a hotspot wants a login).
 # Kept on purpose: see docs/prefs-audit.md.
 firefox-portal-detection.com
