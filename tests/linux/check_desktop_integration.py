@@ -129,6 +129,12 @@ def main() -> int:
             fail(f"no window with class {want!r} appeared; windows seen: {seen or 'none'}")
         wid, props = found
         ok(f"window {wid} has class {seen[wid]} (matches StartupWMClass)")
+        # The class is set when the window is created and the icon a moment
+        # later (a run on a loaded machine saw it missing): wait for it.
+        icon_deadline = time.time() + 30
+        while "_NET_WM_ICON(CARDINAL)" not in props and time.time() < icon_deadline:
+            time.sleep(1)
+            props = x("xprop", "-id", wid, "_NET_WM_ICON", env=env)
         if "_NET_WM_ICON(CARDINAL)" not in props:
             fail(f"window {wid} has no icon (_NET_WM_ICON): the taskbar would show a blank page")
         ok("the window has its own icon")
