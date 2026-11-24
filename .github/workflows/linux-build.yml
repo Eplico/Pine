@@ -173,9 +173,8 @@ jobs:
       # Installs the tarball with evergreen-install, then looks at it as a
       # desktop does: a valid app-menu entry and icon, and a window whose class
       # matches the entry (what makes a pinned launcher start Evergreen and show
-      # its icon). Not blocking until it has passed once on a real build.
+      # its icon). Blocking since it passed on a real build (v0.2, run 45288812860).
       - name: Desktop integration check (launcher, icon, window class)
-        continue-on-error: true
         run: |
           python tests/linux/check_desktop_integration.py \
             --tarball "$(ls release/*-portable.tar.* | head -1)" \
