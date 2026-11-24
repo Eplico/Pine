@@ -21,11 +21,13 @@
 
 import {
   LIMITS,
+  Limiter,
   MiB,
   SegmentPlan,
   backoffMs,
   judgeRangeReply,
   loadState,
+  parseContentRange,
   saveState,
   takeoverVerdict,
   validatorFor,
@@ -56,6 +58,8 @@ const settings = () => {
     minSizeBytes: P.getIntPref(PREF + "minSizeMB", 8) * MiB,
     maxSizeBytes: P.getIntPref(PREF + "maxSizeGB", 64) * 1024 * MiB,
     excludeHosts: P.getStringPref(PREF + "excludeHosts", ""),
+    maxActive: P.getIntPref(PREF + "maxActive", 3),
+    maxConnections: P.getIntPref(PREF + "maxConnections", 32),
   };
 };
 
@@ -118,6 +122,60 @@ function header(http, name) {
   }
 }
 
+/** A request for `download`'s source, with the same credentials Firefox's own downloader uses. */
+function newChannel(download) {
+  let channel;
+  if (download.source.loadingPrincipal) {
+    channel = NetUtil.newChannel({
+      uri: download.source.url,
+      contentPolicyType: Ci.nsIContentPolicy.TYPE_SAVEAS_DOWNLOAD,
+      loadingPrincipal: download.source.loadingPrincipal,
+      // The system principal as the trigger keeps the request from being
+      // mistaken for a third-party one (as in Firefox's own saver).
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+      securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
+    });
+  } else {
+    channel = NetUtil.newChannel({
+      uri: download.source.url,
+      contentPolicyType: Ci.nsIContentPolicy.TYPE_SAVEAS_DOWNLOAD,
+      loadUsingSystemPrincipal: true,
+    });
+  }
+  if (channel instanceof Ci.nsIPrivateBrowsingChannel) {
+    channel.setPrivate(download.source.isPrivate);
+  }
+  if (channel instanceof Ci.nsIHttpChannel) {
+    if (download.source.referrerInfo) {
+      channel.referrerInfo = download.source.referrerInfo;
+    }
+    if (download.source.cookieJarSettings) {
+      channel.loadInfo.cookieJarSettings = download.source.cookieJarSettings;
+    }
+    if (download.source.authHeader) {
+      try {
+        channel.setRequestHeader("Authorization", download.source.authHeader, true);
+      } catch {
+        // Not a header Firefox lets us set; the request then goes without it.
+      }
+    }
+  }
+  if (download.source.userContextId) {
+    // Origin attributes can only be replaced as a whole.
+    channel.loadInfo.originAttributes = {
+      ...channel.loadInfo.originAttributes,
+      userContextId: download.source.userContextId,
+    };
+  }
+  if (channel instanceof Ci.nsIHttpChannelInternal) {
+    // Throttled like page loads and not cached.
+    channel.channelIsForDownload = true;
+    // Cookies are sent even when third-party cookies are blocked.
+    channel.forceAllowThirdPartyCookie = true;
+  }
+  return channel;
+}
+
 /**
  * Downloads a file on several connections. State (`info`): the URL, the file's
  * size, the validator for If-Range, and, when resuming, the saved segments.
@@ -128,11 +186,37 @@ export class SegmentedSaver extends DownloadCopySaver {
     this._info = info; // { url, total, validator, segments|null }
     this._plan = null;
     this._lanes = new Set();
+    this._tickets = new Set();
+    this._place = null;
     this._canceled = false;
   }
 
   async execute(aSetProgressBytesFn, aSetPropertiesFn) {
     this._canceled = false;
+    // At most `maxActive` accelerated downloads run at once; the others wait
+    // here (shown as started, with no progress yet) for a place.
+    EvergreenDownloads.applyLimits();
+    let place = EvergreenDownloads.places.acquire();
+    this._place = place;
+    let release;
+    try {
+      release = await place.promise;
+    } catch {
+      throw new DownloadError({ message: "Saver canceled." });
+    } finally {
+      this._place = null;
+    }
+    try {
+      return await this._execute(aSetProgressBytesFn, aSetPropertiesFn);
+    } finally {
+      release();
+    }
+  }
+
+  async _execute(aSetProgressBytesFn, aSetPropertiesFn) {
+    if (this._canceled) {
+      throw new DownloadError({ message: "Saver canceled." });
+    }
     let download = this.download;
     let targetPath = download.target.path;
     let filePath = download.target.partFilePath || targetPath;
@@ -279,7 +363,21 @@ export class SegmentedSaver extends DownloadCopySaver {
         return;
       }
       let before = plan.doneBytes;
+      // The connections open across all downloads are limited too.
+      let ticket = EvergreenDownloads.connections.acquire();
+      this._tickets.add(ticket);
+      let release;
       try {
+        release = await ticket.promise;
+      } catch {
+        return; // canceled while waiting
+      } finally {
+        this._tickets.delete(ticket);
+      }
+      try {
+        if (this._canceled || this._failure) {
+          return;
+        }
         await this._request(segment);
         return;
       } catch (e) {
@@ -298,63 +396,17 @@ export class SegmentedSaver extends DownloadCopySaver {
           throw e;
         }
         log("retry", e.message, `attempt ${attempt}`);
+        release();
+        release = () => {};
         await sleep(backoffMs(attempt));
+      } finally {
+        release();
       }
     }
   }
 
   _newChannel() {
-    let download = this.download;
-    let channel;
-    if (download.source.loadingPrincipal) {
-      channel = NetUtil.newChannel({
-        uri: download.source.url,
-        contentPolicyType: Ci.nsIContentPolicy.TYPE_SAVEAS_DOWNLOAD,
-        loadingPrincipal: download.source.loadingPrincipal,
-        // The system principal as the trigger keeps the request from being
-        // mistaken for a third-party one (as in Firefox's own saver).
-        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-        securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
-      });
-    } else {
-      channel = NetUtil.newChannel({
-        uri: download.source.url,
-        contentPolicyType: Ci.nsIContentPolicy.TYPE_SAVEAS_DOWNLOAD,
-        loadUsingSystemPrincipal: true,
-      });
-    }
-    if (channel instanceof Ci.nsIPrivateBrowsingChannel) {
-      channel.setPrivate(download.source.isPrivate);
-    }
-    if (channel instanceof Ci.nsIHttpChannel) {
-      if (download.source.referrerInfo) {
-        channel.referrerInfo = download.source.referrerInfo;
-      }
-      if (download.source.cookieJarSettings) {
-        channel.loadInfo.cookieJarSettings = download.source.cookieJarSettings;
-      }
-      if (download.source.authHeader) {
-        try {
-          channel.setRequestHeader("Authorization", download.source.authHeader, true);
-        } catch {
-          // Not a header Firefox lets us set; the request then goes without it.
-        }
-      }
-    }
-    if (download.source.userContextId) {
-      // Origin attributes can only be replaced as a whole.
-      channel.loadInfo.originAttributes = {
-        ...channel.loadInfo.originAttributes,
-        userContextId: download.source.userContextId,
-      };
-    }
-    if (channel instanceof Ci.nsIHttpChannelInternal) {
-      // Throttled like page loads and not cached.
-      channel.channelIsForDownload = true;
-      // Cookies are sent even when third-party cookies are blocked.
-      channel.forceAllowThirdPartyCookie = true;
-    }
-    return channel;
+    return newChannel(this.download);
   }
 
   /** One ranged request for the rest of `segment`. Resolves when the segment is complete. */
@@ -505,6 +557,10 @@ export class SegmentedSaver extends DownloadCopySaver {
 
   cancel() {
     this._canceled = true;
+    this._place?.cancel();
+    for (let ticket of this._tickets) {
+      ticket.cancel();
+    }
     this._abortConnections();
   }
 
@@ -584,11 +640,86 @@ function describeRequest(request) {
   }
 }
 
+// A download younger than this counts as just started (not restored from disk).
+const FRESH_MS = 15000;
+
+/**
+ * What the server says about a file, from one request for its first byte:
+ * the same shape describeRequest() gives for a download's first reply, or
+ * null when it did not answer in time or is not an HTTP server.
+ */
+function probe(download) {
+  return new Promise(resolve => {
+    let channel;
+    try {
+      channel = newChannel(download);
+    } catch {
+      resolve(null);
+      return;
+    }
+    if (!(channel instanceof Ci.nsIHttpChannel)) {
+      resolve(null);
+      return;
+    }
+    channel.setRequestHeader("Accept-Encoding", "identity", false);
+    channel.setRequestHeader("Range", "bytes=0-0", false);
+    let timer = setTimeout(() => {
+      channel.cancel(Cr.NS_BINDING_ABORTED);
+    }, REQUEST_WAIT_MS);
+    let info = null;
+    channel.asyncOpen({
+      QueryInterface: ChromeUtils.generateQI(["nsIStreamListener", "nsIRequestObserver"]),
+      onStartRequest(req) {
+        try {
+          let http = req.QueryInterface(Ci.nsIHttpChannel);
+          if (!Components.isSuccessCode(req.status) || http.responseStatus != 206) {
+            return;
+          }
+          let range = parseContentRange(header(http, "Content-Range"));
+          if (!range || range.start != 0 || !(range.total > 0)) {
+            return;
+          }
+          info = {
+            scheme: http.URI.scheme,
+            method: http.requestMethod,
+            status: 200, // what a full reply would be; the range reply proved the ranges
+            acceptRanges: "bytes",
+            contentEncoding: header(http, "Content-Encoding") ?? "",
+            contentLength: range.total,
+            host: http.URI.asciiHost,
+            validator: validatorFor({ etag: header(http, "ETag"), lastModified: header(http, "Last-Modified") }),
+          };
+        } catch {
+          info = null;
+        }
+        req.cancel(Cr.NS_BINDING_ABORTED);
+      },
+      onDataAvailable(req, stream, offset, count) {
+        drain(stream, count);
+      },
+      onStopRequest() {
+        clearTimeout(timer);
+        resolve(info);
+      },
+    });
+  });
+}
+
 export const EvergreenDownloads = {
   _view: null,
   _list: null,
+  // Downloads running at once, and connections open across all of them.
+  places: new Limiter(0),
+  connections: new Limiter(0),
   // The most recent decisions, for tests and for `evergreen.downloads.log`.
   events: [],
+
+  /** Read the limits from the prefs (they apply to what starts or waits from now on). */
+  applyLimits() {
+    let { maxActive, maxConnections } = settings();
+    this.places.setLimit(maxActive);
+    this.connections.setLimit(maxConnections);
+  },
 
   note(event) {
     this.events.push(event);
@@ -634,7 +765,59 @@ export const EvergreenDownloads = {
       await this._takeOver(download, saver);
     } else if (saver instanceof DownloadCopySaver && saver._unknownProperties?.evergreen) {
       await this._resume(download, saver);
+    } else if (saver instanceof DownloadCopySaver && this._isFresh(download)) {
+      // Started by an extension (the downloads API) or a Firefox feature.
+      await this._takeOverCopy(download, saver);
     }
+  },
+
+  /** A download created just now, not one restored from the list on disk. */
+  _isFresh(download) {
+    let source = download.source;
+    return (
+      !download.succeeded &&
+      !download.error &&
+      !download.hasPartialData &&
+      /^https?:/i.test(source.url) &&
+      // A request shaped by an extension (a method, headers, a body) cannot be repeated by ranges.
+      !source.adjustChannel &&
+      (!source.method || source.method == "GET") &&
+      (!download.startTime || Date.now() - download.startTime.getTime() < FRESH_MS)
+    );
+  },
+
+  /**
+   * A download that began as an ordinary single-connection "copy": ask the
+   * server what it is with one ranged request (bytes 0-0), and if it
+   * qualifies, restart it on several connections like a navigated download.
+   */
+  async _takeOverCopy(download, saver) {
+    let info = await probe(download);
+    if (!info || download.succeeded || download.saver !== saver) {
+      return;
+    }
+    let reason = takeoverVerdict(info, settings());
+    if (reason) {
+      log("left to Firefox:", reason, download.source.url);
+      this.note({ url: download.source.url, action: "left", reason });
+      return;
+    }
+    let state = { url: download.source.url, total: info.contentLength, validator: info.validator, segments: null };
+    let targetPath = download.target.path;
+    if (!download.stopped) {
+      await download.cancel();
+    }
+    if (download.succeeded || download.saver !== saver) {
+      return;
+    }
+    let ours = new SegmentedSaver(state);
+    ours.download = download;
+    ours.alreadyAddedToHistory = saver.alreadyAddedToHistory;
+    download.saver = ours;
+    download.target.partFilePath = targetPath + PART_SUFFIX;
+    download.hasPartialData = false;
+    this.note({ url: download.source.url, action: "adopted" });
+    download.start().catch(() => {});
   },
 
   async _takeOver(download, saver) {

@@ -6,7 +6,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  SETTINGS,
   matchCommands,
+  validSetting,
   parseQuery,
   score,
   words,
@@ -132,4 +134,41 @@ test("mini window: not for Favorites or the start page, or where unavailable", (
     matchCommands("mini window", context({ canMini: true, tab: { pinned: true, isStartPage: false } })).length,
     0
   );
+});
+
+const prefs = {
+  "evergreen.downloads.enabled": true,
+  "evergreen.downloads.connections": 6,
+  "evergreen.downloads.maxActive": 3,
+  "evergreen.peek.enabled": true,
+  "evergreen.externalLinks.miniWindow": false,
+};
+
+test("settings: toggles offer the other state, connection counts the other numbers", () => {
+  let off = matchCommands("> turn off faster", context({ prefs }));
+  assert.deepEqual(off[0].action, { type: "set-pref", name: "evergreen.downloads.enabled", value: false });
+  let mini = matchCommands("> other apps", context({ prefs }));
+  assert.deepEqual(mini[0].action, { type: "set-pref", name: "evergreen.externalLinks.miniWindow", value: true });
+  let eight = matchCommands("> 8 connections", context({ prefs }));
+  assert.deepEqual(eight[0].action, { type: "set-pref", name: "evergreen.downloads.connections", value: 8 });
+  assert.equal(
+    matchCommands("> 6 connections", context({ prefs })).some(r => r.action.value === 6),
+    false
+  );
+  let disabled = matchCommands("> connections", context({ prefs: { ...prefs, "evergreen.downloads.enabled": false } }));
+  assert.equal(disabled.some(r => r.action.name == "evergreen.downloads.connections"), false);
+});
+
+test("settings: every offered action passes validSetting, nothing else does", () => {
+  for (let row of matchCommands("> ", context({ prefs, site: "a.example", canMini: true }))) {
+    if (row.action.type == "set-pref") {
+      assert.equal(validSetting(row.action), true, JSON.stringify(row.action));
+    }
+  }
+  assert.equal(validSetting({ name: "javascript.enabled", value: false }), false);
+  assert.equal(validSetting({ name: "evergreen.peek.enabled", value: "yes" }), false);
+  assert.equal(validSetting({ name: "evergreen.downloads.connections", value: 99 }), false);
+  assert.equal(validSetting({ name: "evergreen.downloads.connections", value: 8 }), true);
+  assert.equal(validSetting(null), false);
+  assert.ok(Object.isFrozen(SETTINGS));
 });

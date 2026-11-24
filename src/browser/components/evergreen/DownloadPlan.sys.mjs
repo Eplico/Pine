@@ -22,6 +22,67 @@ export const LIMITS = {
   maxDelayMs: 30000,
 };
 
+/**
+ * A counting limit with a first-come queue, used for the downloads that run at
+ * once and for the connections open across all downloads. A limit of 0 or less
+ * means no limit. `acquire()` returns { promise, cancel }: the promise resolves
+ * with a release function when a place is free; `cancel()` takes the request
+ * out of the queue (the promise then rejects).
+ */
+export class Limiter {
+  constructor(limit = 0) {
+    this.limit = limit;
+    this.active = 0;
+    this.waiters = [];
+  }
+
+  get waiting() {
+    return this.waiters.length;
+  }
+
+  setLimit(limit) {
+    this.limit = Number.isFinite(limit) ? limit : 0;
+    this._pump();
+  }
+
+  acquire() {
+    let waiter = { resolve: null, reject: null, settled: false };
+    let promise = new Promise((resolve, reject) => {
+      waiter.resolve = resolve;
+      waiter.reject = reject;
+    });
+    this.waiters.push(waiter);
+    this._pump();
+    return {
+      promise,
+      cancel: () => {
+        if (waiter.settled) {
+          return;
+        }
+        waiter.settled = true;
+        this.waiters = this.waiters.filter(w => w !== waiter);
+        waiter.reject(new Error("canceled"));
+      },
+    };
+  }
+
+  _pump() {
+    while (this.waiters.length && (this.limit <= 0 || this.active < this.limit)) {
+      let waiter = this.waiters.shift();
+      waiter.settled = true;
+      this.active++;
+      let released = false;
+      waiter.resolve(() => {
+        if (!released) {
+          released = true;
+          this.active--;
+          this._pump();
+        }
+      });
+    }
+  }
+}
+
 /** The number of connections for a file: the wish, clipped to what makes sense. */
 export function chooseConnections(total, wanted, minSegment = LIMITS.minSegment) {
   let want = Math.max(1, Math.min(LIMITS.maxConnections, Math.floor(Number(wanted)) || 1));

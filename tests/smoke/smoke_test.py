@@ -356,12 +356,26 @@ class Run:
         self.m = Marionette(port=self.port)
         self.m.connect(wait=120)
         self.m.set_context("chrome")
-        self.js(
-            """
-            await until(() => w && w.document.documentElement.hasAttribute("evergreen"), 30000);
-            await until(() => Services.wm.getMostRecentWindow("navigator:browser").gBrowserInit?.delayedStartupFinished, 30000);
-            """
-        )
+        try:
+            self.js(
+                """
+                await until(() => w && w.document.documentElement.hasAttribute("evergreen"), 30000);
+                await until(() => Services.wm.getMostRecentWindow("navigator:browser").gBrowserInit?.delayedStartupFinished, 30000);
+                """
+            )
+        except MarionetteError:
+            # Say why Evergreen did not load: the browser's own error messages.
+            try:
+                errors = self.m.execute(
+                    """return Services.console.getMessageArray()
+                         .filter(m => m instanceof Ci.nsIScriptError && !(m.flags & Ci.nsIScriptError.warningFlag))
+                         .map(m => `${m.sourceName}:${m.lineNumber} ${m.errorMessage}`).slice(0, 15);""",
+                    [],
+                )
+                print("Evergreen did not load. Browser errors:\n  " + "\n  ".join(errors))
+            except Exception as e:  # noqa: BLE001
+                print("Evergreen did not load, and the browser's errors could not be read:", e)
+            raise
 
     def quit(self):
         if self.m:

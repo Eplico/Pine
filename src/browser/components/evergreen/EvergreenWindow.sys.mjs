@@ -27,7 +27,7 @@ import { ArchiveStore, archiveSettings } from "./ArchiveStore.sys.mjs";
 import { SpacesStore } from "./SpacesStore.sys.mjs";
 import { WindowLayout, applyToolbarLayout, centerPopup } from "./EvergreenLayout.sys.mjs";
 import { SearchBar, isStartPage } from "./EvergreenSearch.sys.mjs";
-import { matchCommands } from "./Commands.sys.mjs";
+import { SETTINGS, matchCommands, validSetting } from "./Commands.sys.mjs";
 import * as LinkRouting from "./LinkRouting.sys.mjs";
 import { importBrowserModule } from "./FirefoxModules.sys.mjs";
 
@@ -897,6 +897,12 @@ class WindowController {
       archive: ArchiveStore.entries.slice(0, 200).map(e => ({ id: e.id, title: e.title, url: e.url })),
       canSplit,
       canMini: this.canPopOut(),
+      prefs: Object.fromEntries(
+        Object.entries(SETTINGS).map(([name, def]) => [
+          name,
+          def.type == "bool" ? Services.prefs.getBoolPref(name, false) : Services.prefs.getIntPref(name, 0),
+        ])
+      ),
       site: LinkRouting.siteOf(tab.linkedBrowser.currentURI.spec),
       routedTo: this.routedSpace(tab.linkedBrowser.currentURI.spec)?.id ?? null,
     });
@@ -952,6 +958,15 @@ class WindowController {
         break;
       case "mini-window":
         this.popOut(gBrowser.selectedTab);
+        break;
+      case "set-pref":
+        if (validSetting(action)) {
+          if (SETTINGS[action.name].type == "bool") {
+            Services.prefs.setBoolPref(action.name, action.value);
+          } else {
+            Services.prefs.setIntPref(action.name, action.value);
+          }
+        }
         break;
       case "split":
         win.BrowserCommands?.addTabSplitView?.();

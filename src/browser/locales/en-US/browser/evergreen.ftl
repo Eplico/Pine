@@ -208,6 +208,15 @@ evergreen-command-route-site = Always open { $site } in { $name }
 #   $site (String) - A site, e.g. github.com.
 evergreen-command-unroute-site = Stop sending { $site } to a Space
 evergreen-command-mini-window = Pop out to a mini window
+evergreen-command-downloads-on = Turn on faster downloads
+evergreen-command-downloads-off = Turn off faster downloads
+# Variables:
+#   $count (Number) - How many connections each large download may use.
+evergreen-command-download-connections = Download with { $count } connections
+evergreen-command-peek-on = Turn on Peek
+evergreen-command-peek-off = Turn off Peek
+evergreen-command-external-mini-on = Open links from other apps in a mini window
+evergreen-command-external-mini-off = Open links from other apps in a tab
 evergreen-command-new-space = New Space…
 evergreen-command-split = Split view
 evergreen-command-unsplit = Close split view

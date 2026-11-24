@@ -21,12 +21,35 @@
  *   { type: "toggle-keep" }
  *   { type: "route-site", host, spaceId }, { type: "unroute-site", host }
  *   { type: "mini-window" }
+ *   { type: "set-pref", name, value }   (only the settings listed in SETTINGS)
  *
  * Text starting with ">" asks for commands only ("> " alone lists them all);
  * otherwise commands are suggested only when two or more characters match.
  */
 
 export const COMMAND_PREFIX = ">";
+
+/**
+ * The settings the command bar can change (there is no settings page yet), with
+ * what each accepts. `set-pref` actions are checked against this list before
+ * anything is written, so plain data can't set any other pref.
+ */
+export const SETTINGS = Object.freeze({
+  "evergreen.downloads.enabled": { type: "bool" },
+  "evergreen.downloads.connections": { type: "int", choices: [2, 4, 6, 8, 12, 16] },
+  "evergreen.downloads.maxActive": { type: "int", choices: [1, 2, 3, 5, 0] },
+  "evergreen.peek.enabled": { type: "bool" },
+  "evergreen.externalLinks.miniWindow": { type: "bool" },
+});
+
+/** Is `action` an allowed change to one of SETTINGS? */
+export function validSetting(action) {
+  let def = SETTINGS[action?.name];
+  if (!def) {
+    return false;
+  }
+  return def.type == "bool" ? typeof action.value == "boolean" : def.choices.includes(action.value);
+}
 export const MAX_COMMAND_RESULTS = 3;
 export const MAX_COMMAND_RESULTS_ONLY = 12;
 const MIN_QUERY = 2;
@@ -90,6 +113,7 @@ export function parseQuery(text) {
  *   canMini: boolean    (the window offers mini windows)
  *   site: string|null   (the selected tab's site, e.g. "github.com")
  *   routedTo: spaceId|null   (where link routing sends that site)
+ *   prefs: { [name in SETTINGS]: current value }
  */
 export function matchCommands(text, context) {
   let { commandsOnly, query } = parseQuery(text);
@@ -161,6 +185,50 @@ export function matchCommands(text, context) {
       { label: "pop out to a mini window", keywords: "peek float window small" },
       { type: "mini-window" }
     );
+  }
+  let prefs = context.prefs ?? {};
+  let toggle = (name, onId, offId, onLabel, offLabel, keywords) => {
+    if (!(name in prefs)) {
+      return;
+    }
+    let to = !prefs[name];
+    add(to ? onId : offId, {}, { label: to ? onLabel : offLabel, keywords }, { type: "set-pref", name, value: to });
+  };
+  toggle(
+    "evergreen.downloads.enabled",
+    "evergreen-command-downloads-on",
+    "evergreen-command-downloads-off",
+    "turn on faster downloads",
+    "turn off faster downloads",
+    "accelerated download manager connections setting"
+  );
+  toggle(
+    "evergreen.peek.enabled",
+    "evergreen-command-peek-on",
+    "evergreen-command-peek-off",
+    "turn on peek",
+    "turn off peek",
+    "favorites links mini window setting"
+  );
+  toggle(
+    "evergreen.externalLinks.miniWindow",
+    "evergreen-command-external-mini-on",
+    "evergreen-command-external-mini-off",
+    "open links from other apps in a mini window",
+    "open links from other apps in a tab",
+    "external setting"
+  );
+  if ("evergreen.downloads.connections" in prefs && prefs["evergreen.downloads.enabled"] !== false) {
+    for (let n of SETTINGS["evergreen.downloads.connections"].choices) {
+      if (n != prefs["evergreen.downloads.connections"]) {
+        add(
+          "evergreen-command-download-connections",
+          { count: n },
+          { label: `download with ${n} connections`, keywords: "faster speed setting" },
+          { type: "set-pref", name: "evergreen.downloads.connections", value: n }
+        );
+      }
+    }
   }
   add("evergreen-command-new-space", {}, { label: "new space", keywords: "create add" }, { type: "new-space" });
   if (context.canSplit && !tab.isStartPage) {

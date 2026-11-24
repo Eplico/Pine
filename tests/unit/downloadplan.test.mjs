@@ -192,3 +192,48 @@ test("only large, splittable, plain HTTP downloads are taken over", () => {
   assert.equal(reason({}, { excludeHosts: "example.org" }), "host excluded");
   assert.equal(reason({ contentLength: 4 * MiB }, { minSizeBytes: 2 * MiB }), null);
 });
+
+test("Limiter: places are handed out in order and released", async () => {
+  let limiter = new D.Limiter(2);
+  let a = limiter.acquire();
+  let b = limiter.acquire();
+  let c = limiter.acquire();
+  let releaseA = await a.promise;
+  await b.promise;
+  assert.equal(limiter.active, 2);
+  assert.equal(limiter.waiting, 1);
+  let done = false;
+  c.promise.then(() => (done = true));
+  await Promise.resolve();
+  assert.equal(done, false);
+  releaseA();
+  releaseA(); // releasing twice frees one place only
+  await c.promise;
+  assert.equal(limiter.active, 2);
+});
+
+test("Limiter: a canceled request leaves the queue", async () => {
+  let limiter = new D.Limiter(1);
+  let first = limiter.acquire();
+  let release = await first.promise;
+  let second = limiter.acquire();
+  let third = limiter.acquire();
+  second.cancel();
+  await assert.rejects(second.promise, /canceled/);
+  assert.equal(limiter.waiting, 1);
+  release();
+  await third.promise;
+  assert.equal(limiter.active, 1);
+});
+
+test("Limiter: 0 is unlimited, and raising the limit wakes the queue", async () => {
+  let unlimited = new D.Limiter(0);
+  await Promise.all(Array.from({ length: 50 }, () => unlimited.acquire().promise));
+  assert.equal(unlimited.active, 50);
+  let limiter = new D.Limiter(1);
+  await limiter.acquire().promise;
+  let queued = limiter.acquire();
+  limiter.setLimit(2);
+  await queued.promise;
+  assert.equal(limiter.active, 2);
+});

@@ -136,6 +136,8 @@ pref("evergreen.downloads.connections", 6);   // per download, 1 to 16
 pref("evergreen.downloads.minSizeMB", 8);     // smaller files are left to Firefox
 pref("evergreen.downloads.maxSizeGB", 64);    // larger files are left to Firefox
 pref("evergreen.downloads.excludeHosts", ""); // comma-separated; subdomains included
+pref("evergreen.downloads.maxActive", 3);      // accelerated downloads at once; the rest wait (0 = no limit)
+pref("evergreen.downloads.maxConnections", 32); // connections open across all downloads (0 = no limit)
 pref("evergreen.downloads.log", false);       // decisions and retries to the browser console
 
 // Link routing (design §7.8): a JSON list of { host, spaceId }; set from the
