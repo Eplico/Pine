@@ -130,13 +130,22 @@ def main() -> int:
         wid, props = found
         ok(f"window {wid} has class {seen[wid]} (matches StartupWMClass)")
         # The class is set when the window is created and the icon a moment
-        # later (a run on a loaded machine saw it missing): wait for it.
+        # later; and Evergreen can have more than one window with the class (a
+        # hidden one first). It is enough that a window of the class has an icon.
         icon_deadline = time.time() + 30
-        while "_NET_WM_ICON(CARDINAL)" not in props and time.time() < icon_deadline:
-            time.sleep(1)
-            props = x("xprop", "-id", wid, "_NET_WM_ICON", env=env)
-        if "_NET_WM_ICON(CARDINAL)" not in props:
-            fail(f"window {wid} has no icon (_NET_WM_ICON): the taskbar would show a blank page")
+        has_icon = False
+        while not has_icon and time.time() < icon_deadline:
+            for other in windows(env):
+                p2 = x("xprop", "-id", other, "WM_CLASS", "_NET_WM_ICON", env=env)
+                c2 = re.search(r"WM_CLASS\(STRING\) = (.*)", p2)
+                names2 = [n.lower() for n in re.findall(r'"([^"]*)"', c2.group(1))] if c2 else []
+                if want in names2 and "_NET_WM_ICON(CARDINAL)" in p2:
+                    has_icon = True
+                    break
+            if not has_icon:
+                time.sleep(1)
+        if not has_icon:
+            fail(f"no window of class {want!r} has an icon (_NET_WM_ICON): the taskbar would show a blank page")
         ok("the window has its own icon")
         print("\nAll desktop-integration checks passed")
         return 0
