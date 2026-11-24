@@ -33,7 +33,7 @@ after its class); it now waits for the icon.
 | Peek as an in-page sheet | Peek is Firefox's mini window (a small separate window), not Arc's sheet. |
 | Link routing UI beyond the command bar | Rules are a JSON pref; no editor listing them. |
 | Wayland check of the desktop entry | Still X11 only. |
-| Running the Windows installer from the in-app update | The Windows build workflow now installs silently, starts and uninstalls (`continue-on-error` until it has passed once); the in-app path itself (button, quit, installer opens) is untested. |
+| Running the Windows installer from the in-app update | The installer itself is tested (silent install, start, uninstall: passes in CI); the in-app path (button, quit, installer opens) is untested. |
 
 ## In one paragraph
 
@@ -527,10 +527,11 @@ a cloud session.
    Check for newer Firefox security releases first ("Urgent" below;
    `FIREFOX_160_0_1_RELEASE` was the newest on 2026-11-24). **Do not push workflow
    changes between a build and its publish** (see "Publishing releases: the 403").
-2. Still unchecked on the Windows 0.3 release: the new workflow step that installs
-   it silently, starts it and uninstalls (`continue-on-error`; it is in the 0.3
-   run's log only if it ran: that run started before the step existed, so run
-   `windows-build.yml` with `from_run` once and read it), and a person installing it.
+2. Verified on the Windows 0.3 package (run `45326604382`): the installer installs
+   silently, the *installed* browser passes the whole smoke test (Firefox 160.0.1),
+   and the uninstaller removes it. That step is now required in the workflow. Still
+   untested: the in-app update button that runs the installer, and a person using
+   the installed build.
 3. The owner installs with `python3 evergreen-install` from the Linux release and
    accepts the "use my earlier data" offer, then uses the command bar, Peek and
    routing for a while: **nothing from M2 has been used by a person yet**, only

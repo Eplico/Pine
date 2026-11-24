@@ -193,9 +193,8 @@ jobs:
 
       # What the in-app update does at its last step, and what a user does: run
       # the installer (silently here), start what it installed, remove it again.
-      # Not required to pass yet (it has never run); read its log, then make it required.
+      # Passed on the 0.3 package (run 45326604382): required now.
       - name: Install silently, start the installed browser, uninstall
-        continue-on-error: true
         run: |
           $setup = Get-ChildItem release\*-setup.exe | Select-Object -First 1
           $dir = 'C:\eg\installed'
