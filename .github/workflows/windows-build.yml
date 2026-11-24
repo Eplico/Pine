@@ -281,3 +281,4 @@ jobs:
           if (-not $created) { throw "could not create the release" }
           # Make it the repository's latest release if it was created without that.
           gh release edit "v$version" --latest 2>&1 | Write-Host
+          $global:LASTEXITCODE = 0  # the release exists; being "latest" is a courtesy
