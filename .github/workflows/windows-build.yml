@@ -267,7 +267,10 @@ jobs:
             if ($env:GITHUB_REF_TYPE -eq 'tag') {
               gh release create $env:GITHUB_REF_NAME @files --title $title --notes-file release-notes.md --verify-tag
             } else {
-              gh release create "v$version" @files --title $title --notes-file release-notes.md --target $sha
+              # From the second attempt on, without asking for "latest" (the Linux
+              # workflow never does, and its releases publish).
+              $latest = if ($attempt -gt 1) { @('--latest=false') } else { @() }
+              gh release create "v$version" @files --title $title --notes-file release-notes.md --target $sha @latest
             }
             if ($LASTEXITCODE -eq 0) { $created = $true; break }
             "release attempt $attempt failed (exit $LASTEXITCODE)"
@@ -276,3 +279,5 @@ jobs:
             Start-Sleep -Seconds (20 * $attempt)
           }
           if (-not $created) { throw "could not create the release" }
+          # Make it the repository's latest release if it was created without that.
+          gh release edit "v$version" --latest 2>&1 | Write-Host
